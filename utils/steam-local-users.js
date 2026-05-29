@@ -21,6 +21,7 @@ function pushUnique(out, seen, candidate) {
   out.push(normalized);
 }
 
+//Only Windows
 function readRegistryValue(key, valueName) {
   if (process.platform !== "win32") return "";
   try {
@@ -36,32 +37,11 @@ function readRegistryValue(key, valueName) {
       const match = trimmed.match(/REG_\w+\s+(.+)$/i);
       if (match) return String(match[1] || "").trim();
     }
-  } catch {}
+  } catch { }
   return "";
 }
 
-function deriveSteamRootFromHint(hintPath) {
-  const normalized = path.normalize(String(hintPath || "").trim());
-  if (!normalized) return "";
-  const parts = normalized.split(path.sep).filter(Boolean);
-  const lower = parts.map((part) => part.toLowerCase());
-  const appcacheIndex = lower.lastIndexOf("appcache");
-  if (appcacheIndex > 0 && lower[appcacheIndex + 1] === "stats") {
-    return path.dirname(path.dirname(normalized));
-  }
-  const configIndex = lower.lastIndexOf("config");
-  if (configIndex > 0 && lower[configIndex + 1] === "loginusers.vdf") {
-    return path.dirname(path.dirname(normalized));
-  }
-  if (
-    lower[lower.length - 1] === "steam" &&
-    fs.existsSync(path.join(normalized, "config", "loginusers.vdf"))
-  ) {
-    return normalized;
-  }
-  return "";
-}
-
+//Only Windows
 function getSteamRootCandidates(hintPaths = []) {
   const out = [];
   const seen = new Set();
@@ -94,24 +74,50 @@ function getSteamRootCandidates(hintPaths = []) {
     readRegistryValue("HKLM\\SOFTWARE\\Valve\\Steam", "InstallPath"),
   );
 
-  const envCandidates = [
-    process.env["ProgramFiles(x86)"]
+//If Windows
+  const envCandidates = process.platform === "win32" ?
+    [process.env["ProgramFiles(x86)"]
       ? path.join(process.env["ProgramFiles(x86)"], "Steam")
       : "",
     process.env.ProgramFiles
       ? path.join(process.env.ProgramFiles, "Steam")
       : "",
-    "C:\\Program Files (x86)\\Steam",
-    "C:\\Program Files\\Steam",
-    "D:\\Steam",
-    "E:\\Steam",
-    "F:\\Steam",
-    "G:\\Steam",
-  ];
+      "C:\\Program Files (x86)\\Steam",
+      "C:\\Program Files\\Steam",
+      "D:\\Steam",
+      "E:\\Steam",
+      "F:\\Steam",
+      "G:\\Steam"]
+    : //else linux
+    [process.env.HOME
+      ? path.join(process.env.HOME, ".steam/root")
+      : ""]
   for (const candidate of envCandidates) {
     pushUnique(out, seen, candidate);
   }
   return out;
+}
+
+function deriveSteamRootFromHint(hintPath) {
+  const normalized = path.normalize(String(hintPath || "").trim());
+  if (!normalized) return "";
+  const parts = normalized.split(path.sep).filter(Boolean);
+  const lower = parts.map((part) => part.toLowerCase());
+  const appcacheIndex = lower.lastIndexOf("appcache");
+  if (appcacheIndex > 0 && lower[appcacheIndex + 1] === "stats") {
+    return path.dirname(path.dirname(normalized));
+  }
+  const configIndex = lower.lastIndexOf("config");
+  if (configIndex > 0 && lower[configIndex + 1] === "loginusers.vdf") {
+    return path.dirname(path.dirname(normalized));
+  }
+  if (
+    lower[lower.length - 1] === "steam" &&
+    fs.existsSync(path.join(normalized, "config", "loginusers.vdf"))
+  ) {
+    return normalized;
+  }
+  return "";
 }
 
 function resolveSteamRoot(hintPaths = []) {
@@ -183,9 +189,9 @@ function parseLoginUsersVdf(raw) {
   const parsed = parseObject();
   const users =
     parsed &&
-    typeof parsed === "object" &&
-    parsed.users &&
-    typeof parsed.users === "object"
+      typeof parsed === "object" &&
+      parsed.users &&
+      typeof parsed.users === "object"
       ? parsed.users
       : parsed;
 
