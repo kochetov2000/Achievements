@@ -1,0 +1,74 @@
+appId: com.achievements.app
+productName: Achievements
+copyright: Copyright © 2025 JokerVerse
+artifactName: ${productName}-Setup-${version}.${ext}
+electronVersion: 40.8.3
+afterPack: ./build/afterPack.js
+directories:
+    output: dist
+files:
+    - 'icon.ico'
+    - 'main.js'
+    - 'preload.js'
+    - 'index.html'
+    - 'overlay.html'
+    - 'progress.html'
+    - 'playtime.html'
+    - 'utils/playtime-log-watcher.js'
+    - 'style.css'
+    - 'tray-menu.html'
+    - 'tray-menu.js'
+    - 'tray-menu.css'
+    - 'sounds/**/*'
+    - 'presets/**/*'
+    - 'utils/**/*'
+    - 'utils/pslist-wrapper.mjs'
+    - 'assets/**'
+extraResources:
+    - from: ./sounds
+      to: sounds
+    - from: ./presets
+      to: presets
+    - from: ./icon.ico
+      to: icon.ico
+    - from: ./icon.png
+      to: icon.png
+    - from: ./tools/schema_parse.zip
+      to: tools/schema_parse.zip
+    - from: ./node_modules/playwright-core/.local-browsers
+      to: playwright-browsers
+
+asarUnpack:
+    - 'utils/**'
+    - 'utils/pslist-wrapper.mjs'
+    - '**/node_modules/screenshot-desktop/**'
+    - '**/node_modules/playwright/**'
+    - '**/node_modules/playwright-core/**'
+    - '**/node_modules/**/.local-browsers/**'
+
+win:
+    target:
+        - target: nsis
+          arch:
+              - x64
+    icon: icon.ico
+
+nsis:
+    oneClick: false
+    perMachine: true
+    allowToChangeInstallationDirectory: true
+    createDesktopShortcut: true
+    createStartMenuShortcut: true
+    shortcutName: "Achievements"
+
+linux:
+    target:
+        - AppImage
+        - tar.xz
+    artifactName: ${productName}-${os}-${arch}.${ext}
+    icon: icon.png
+
+publish:
+    provider: github
+    owner: PSerban93
+    repo: Achievements
