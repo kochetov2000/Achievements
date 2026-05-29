@@ -8,6 +8,7 @@ const {
   globalShortcut,
   Tray,
   shell,
+  Menu,
 } = require("electron");
 // Polyfill File for environments where undici expects it (Electron main may lack global File)
 if (typeof globalThis.File === "undefined") {
@@ -540,12 +541,12 @@ function renameLegacyPresetFoldersIfNeeded() {
 function runWindowsConfirm({ title, message }) {
   const ps = process.env.SystemRoot
     ? path.join(
-        process.env.SystemRoot,
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
-      )
+      process.env.SystemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    )
     : "powershell.exe";
   const script = [
     "Add-Type -AssemblyName System.Windows.Forms;",
@@ -860,9 +861,9 @@ function collectSteamOfficialHintPaths() {
         if (typeof data?.save_path === "string" && data.save_path.trim()) {
           hints.push(data.save_path.trim());
         }
-      } catch {}
+      } catch { }
     }
-  } catch {}
+  } catch { }
   return hints;
 }
 
@@ -949,7 +950,7 @@ function resolveSteamOfficialCacheAccountId(
     explicitSteamId ||
     normalizeSteamOfficialSteamId(
       resolved?.preferences?.steamOfficialSteamId ||
-        cachedPreferences?.steamOfficialSteamId,
+      cachedPreferences?.steamOfficialSteamId,
     );
   const preferredAccountId = steamId64ToAccountId(preferredSteamId);
   if (preferredAccountId) return preferredAccountId;
@@ -1037,10 +1038,10 @@ function resolveShadPs4AchievementCacheUserId(
   const resolved = normalizeAchievementCacheOptions(options);
   const explicitUserId = String(
     resolved.shadps4UserId ||
-      resolved.shadps4_user_id ||
-      resolved.userId ||
-      resolved.user_id ||
-      "",
+    resolved.shadps4_user_id ||
+    resolved.userId ||
+    resolved.user_id ||
+    "",
   ).trim();
   if (explicitUserId)
     return sanitizeConfigName(explicitUserId) || explicitUserId;
@@ -1148,13 +1149,13 @@ function loadUiLocale(lang) {
   const filePath = path.join(UI_LOCALE_DIR, `${normalized}.json`);
   try {
     englishData = JSON.parse(fs.readFileSync(englishPath, "utf8"));
-  } catch {}
+  } catch { }
   if (normalized === "english") {
     localizedData = englishData;
   } else {
     try {
       localizedData = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    } catch {}
+    } catch { }
   }
   const data =
     normalized === "english"
@@ -1363,9 +1364,9 @@ function isProgressMutedByPrefs(prefs, payload) {
   const key = buildProgressMuteKey(
     payload?.config_path || payload?.configPath || "",
     payload?.configName ||
-      payload?.config_name ||
-      payload?.config ||
-      selectedConfig,
+    payload?.config_name ||
+    payload?.config ||
+    selectedConfig,
   );
   return key ? list.includes(key) : false;
 }
@@ -1556,7 +1557,7 @@ function readSteamApiKeyFromFile() {
       const raw = fs.readFileSync(fp, "utf8");
       const key = parseSteamApiKeyFromText(raw);
       if (key) return key;
-    } catch {}
+    } catch { }
   }
   return "";
 }
@@ -1589,7 +1590,7 @@ function removeSteamApiKeyFiles() {
   for (const fp of targets) {
     try {
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -1723,7 +1724,7 @@ function resolveSaveFilePath(saveBase, appid) {
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) return p;
-    } catch {}
+    } catch { }
   }
   return path.join(saveBase, String(appid), "achievements.json");
 }
@@ -1815,7 +1816,7 @@ function resolveGpdPathForConfig(config) {
       const files = fs.readdirSync(base);
       const found = files.find((f) => f.toLowerCase().endsWith(".gpd"));
       if (found) return path.join(base, found);
-    } catch {}
+    } catch { }
   }
   return base && appid ? path.join(base, `${appid}.gpd`) : "";
 }
@@ -1843,7 +1844,7 @@ function resolveTropusrPathForConfig(config) {
     const files = fs.readdirSync(trophyDir);
     const found = files.find((f) => f.toLowerCase() === "tropusr.dat");
     if (found) return path.join(trophyDir, found);
-  } catch {}
+  } catch { }
   return direct;
 }
 
@@ -1908,7 +1909,7 @@ function collectPs4ProgressFilesForConfig(root, npcommid, preferredUser = "") {
         path.join(homeDir, ent.name, "trophy", `${normalizedNpCommId}.xml`),
       );
     }
-  } catch {}
+  } catch { }
   out.sort((a, b) => {
     if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
     if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
@@ -1986,7 +1987,7 @@ function resolvePs4TrophyDirForConfig(config) {
     try {
       const stat = fs.statSync(savePath);
       if (stat.isDirectory()) return savePath;
-    } catch {}
+    } catch { }
   }
   return schemaPath || trophyPath || "";
 }
@@ -2022,7 +2023,7 @@ function resolvePs4ProgressPathForConfig(config) {
   if (!config) return "";
   const direct =
     typeof config.shadps4_progress_path === "string" &&
-    config.shadps4_progress_path
+      config.shadps4_progress_path
       ? config.shadps4_progress_path
       : typeof config.save_path === "string" && config.save_path
         ? config.save_path
@@ -2034,7 +2035,7 @@ function resolvePs4ProgressPathForConfig(config) {
       try {
         const stat = fs.statSync(direct);
         if (stat.isFile()) return direct;
-      } catch {}
+      } catch { }
     }
     return "";
   }
@@ -2046,7 +2047,7 @@ function resolvePs4ProgressPathForConfig(config) {
       try {
         const stat = fs.statSync(direct);
         if (stat.isFile()) return direct;
-      } catch {}
+      } catch { }
     }
     return "";
   }
@@ -2078,7 +2079,7 @@ function normalizeGenerationProgressState(payload = {}, fallback = {}) {
     Number.isFinite(Number(payload.current)) && Number(payload.current) >= 0
       ? Number(payload.current)
       : Number.isFinite(Number(fallback.current)) &&
-          Number(fallback.current) >= 0
+        Number(fallback.current) >= 0
         ? Number(fallback.current)
         : 0;
   const total =
@@ -2112,7 +2113,7 @@ function broadcastGenerationProgress(channel, payload) {
       if (!win.isDestroyed()) {
         win.webContents.send(channel, payload);
       }
-    } catch {}
+    } catch { }
   }
 }
 
@@ -2396,7 +2397,7 @@ function pushAchgen(level, message) {
     for (const win of BrowserWindow.getAllWindows()) {
       try {
         if (!win.isDestroyed()) win.webContents.send("achgen:log", payload);
-      } catch {}
+      } catch { }
     }
 
     const color =
@@ -2411,7 +2412,7 @@ function pushAchgen(level, message) {
               color,
               rawMessage: rawMsg,
             });
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -2424,7 +2425,7 @@ function pushAchgen(level, message) {
           ? originalConsole.warn
           : originalConsole.info;
     fn(`${msg}`);
-  } catch {}
+  } catch { }
 }
 
 ipcMain.handle("achgen:get-backlog", () => achgenBuffer);
@@ -2433,11 +2434,11 @@ function emitSchemaReady(data, senderWC = null) {
   try {
     if (senderWC && !senderWC.isDestroyed?.())
       senderWC.send("config:schema-ready", data);
-  } catch {}
+  } catch { }
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       if (!win.isDestroyed()) win.webContents.send("config:schema-ready", data);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -2548,15 +2549,15 @@ function ensureMainWindowVisibleForUpdatePrompt() {
     if (mainWindow.isMinimized?.()) {
       mainWindow.restore();
     }
-  } catch {}
+  } catch { }
   try {
     if (!mainWindow.isVisible?.()) {
       mainWindow.show();
     }
-  } catch {}
+  } catch { }
   try {
     mainWindow.focus();
-  } catch {}
+  } catch { }
   return mainWindow;
 }
 
@@ -2689,11 +2690,11 @@ function compareLooseAppVersions(leftVersion, rightVersion) {
 function wasAppUpdatedOnCurrentLaunch(argv = process.argv) {
   return Array.isArray(argv)
     ? argv.some(
-        (arg) =>
-          String(arg || "")
-            .trim()
-            .toLowerCase() === APP_UPDATE_INSTALL_COMPLETE_ARG,
-      )
+      (arg) =>
+        String(arg || "")
+          .trim()
+          .toLowerCase() === APP_UPDATE_INSTALL_COMPLETE_ARG,
+    )
     : false;
 }
 
@@ -3258,7 +3259,7 @@ function resolveIconAbsolutePath(configPath, rel) {
     if (path.isAbsolute(rel)) {
       try {
         if (fs.existsSync(rel)) return rel;
-      } catch {}
+      } catch { }
     }
     if (!isNonEmptyString(configPath)) return ICON_PNG_PATH;
     const base = path.basename(String(rel));
@@ -3279,9 +3280,9 @@ function resolveIconAbsolutePath(configPath, rel) {
     for (const p of candidates) {
       try {
         if (fs.existsSync(p)) return p;
-      } catch {}
+      } catch { }
     }
-  } catch {}
+  } catch { }
   return ICON_PNG_PATH;
 }
 
@@ -3303,7 +3304,7 @@ function waitForFileExists(fp, tries = 50, delay = 80) {
     const tick = (n) => {
       try {
         if (fs.existsSync(fp)) return resolve(true);
-      } catch {}
+      } catch { }
       if (n <= 0) return resolve(false);
       setTimeout(() => tick(n - 1), delay);
     };
@@ -3331,7 +3332,7 @@ async function queueXeniaNotificationWhenIconReady(achievement) {
         }
       }
     }
-  } catch {}
+  } catch { }
   queueAchievementNotification(achievement);
 }
 
@@ -3354,17 +3355,17 @@ function registerOverlayShortcut(newShortcut) {
       matchMode: "required",
       otherShortcuts: interactShortcut
         ? [
-            {
-              id: "overlay-interact",
-              source: "overlay-interact",
-              scope: "user",
-              shortcut: interactShortcut,
-              allowSingle: true,
-              matchMode: "required",
-              priority: OVERLAY_SHORTCUT_PRIORITY_INTERACT,
-              target: "overlay-interact",
-            },
-          ]
+          {
+            id: "overlay-interact",
+            source: "overlay-interact",
+            scope: "user",
+            shortcut: interactShortcut,
+            allowSingle: true,
+            matchMode: "required",
+            priority: OVERLAY_SHORTCUT_PRIORITY_INTERACT,
+            target: "overlay-interact",
+          },
+        ]
         : [],
     });
     if (
@@ -3556,7 +3557,7 @@ function applyOverlayInputMode() {
     } else {
       overlayWindow.setIgnoreMouseEvents(true, { forward: true });
     }
-  } catch {}
+  } catch { }
 }
 
 function applyOverlayFocusMode() {
@@ -3564,7 +3565,7 @@ function applyOverlayFocusMode() {
   try {
     if (overlayWindow.isFocused()) overlayWindow.blur();
     overlayWindow.setFocusable(false);
-  } catch {}
+  } catch { }
 }
 
 function isOverlayEffectivelyPresented() {
@@ -3596,28 +3597,28 @@ function getOverlayWindowLogState() {
   if (!hasWindow) return state;
   try {
     state.windowId = overlayWindow.id;
-  } catch {}
+  } catch { }
   try {
     state.visible = overlayWindow.isVisible();
-  } catch {}
+  } catch { }
   try {
     state.focused = overlayWindow.isFocused();
-  } catch {}
+  } catch { }
   try {
     state.bounds = overlayWindow.getBounds();
-  } catch {}
+  } catch { }
   try {
     if (typeof overlayWindow.isAlwaysOnTop === "function") {
       state.alwaysOnTop = overlayWindow.isAlwaysOnTop();
     }
-  } catch {}
+  } catch { }
   try {
     if (overlayWindow.webContents && !overlayWindow.webContents.isDestroyed()) {
       state.webContentsId = overlayWindow.webContents.id;
       state.webContentsLoading = overlayWindow.webContents.isLoading();
       state.webContentsUrl = overlayWindow.webContents.getURL() || null;
     }
-  } catch {}
+  } catch { }
   return state;
 }
 
@@ -3665,7 +3666,7 @@ function maybeShowOverlayAfterRendererReady(reason = "unknown") {
   let windowVisible = false;
   try {
     windowVisible = overlayWindow.isVisible();
-  } catch {}
+  } catch { }
 
   clearOverlayPendingShowState();
 
@@ -3673,7 +3674,7 @@ function maybeShowOverlayAfterRendererReady(reason = "unknown") {
     if (!windowVisible) {
       try {
         overlayWindow.setOpacity(0);
-      } catch {}
+      } catch { }
       overlayLogger.debug("overlay:showInactive:attempt", {
         reason,
         state: getOverlayWindowLogState(),
@@ -3699,13 +3700,13 @@ function maybeShowOverlayAfterRendererReady(reason = "unknown") {
 
   try {
     overlayWindow.blur();
-  } catch {}
+  } catch { }
   try {
     overlayLogger.debug("overlay:visibility-check:after-showInactive", {
       reason,
       visible: !!overlayWindow.isVisible(),
     });
-  } catch {}
+  } catch { }
   setTimeout(() => {
     overlayLogger.debug("overlay:post-present-state", {
       source: `maybeShowOverlayAfterRendererReady:${reason}`,
@@ -3817,26 +3818,26 @@ function reassertOverlayAlwaysOnTop(reason) {
     if (typeof overlayWindow.isAlwaysOnTop === "function") {
       before = overlayWindow.isAlwaysOnTop();
     }
-  } catch {}
+  } catch { }
   try {
     if (before === false) {
       overlayWindow.setAlwaysOnTop(false);
     }
-  } catch {}
+  } catch { }
   try {
     overlayWindow.setAlwaysOnTop(true, "screen-saver");
-  } catch {}
+  } catch { }
   try {
     overlayWindow.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true,
     });
-  } catch {}
+  } catch { }
   let after = null;
   try {
     if (typeof overlayWindow.isAlwaysOnTop === "function") {
       after = overlayWindow.isAlwaysOnTop();
     }
-  } catch {}
+  } catch { }
   overlayLogger.debug("overlay:always-on-top:reasserted", {
     level: "screen-saver",
     reason: resolvedReason,
@@ -3850,7 +3851,7 @@ function reassertOverlayAlwaysOnTop(reason) {
       if (typeof overlayWindow.isAlwaysOnTop === "function") {
         verified = overlayWindow.isAlwaysOnTop();
       }
-    } catch {}
+    } catch { }
     if (verified !== false) {
       overlayLogger.debug("overlay:always-on-top:verify", {
         reason: resolvedReason,
@@ -3864,21 +3865,21 @@ function reassertOverlayAlwaysOnTop(reason) {
     });
     try {
       overlayWindow.setAlwaysOnTop(false);
-    } catch {}
+    } catch { }
     try {
       overlayWindow.setAlwaysOnTop(true, "screen-saver");
-    } catch {}
+    } catch { }
     try {
       overlayWindow.setVisibleOnAllWorkspaces(true, {
         visibleOnFullScreen: true,
       });
-    } catch {}
+    } catch { }
     let afterRetry = null;
     try {
       if (typeof overlayWindow.isAlwaysOnTop === "function") {
         afterRetry = overlayWindow.isAlwaysOnTop();
       }
-    } catch {}
+    } catch { }
     overlayLogger.debug("overlay:always-on-top:retry", {
       reason: resolvedReason,
       afterRetry,
@@ -3898,7 +3899,7 @@ function setOverlayPresented(next) {
       overlayPresented,
       "setOverlayPresented",
     );
-  } catch {}
+  } catch { }
   overlayLogger.info("overlay:presented:set", {
     next: overlayPresented,
     hasWindow: !!overlayWindow && !overlayWindow.isDestroyed(),
@@ -3917,12 +3918,12 @@ function setOverlayPresented(next) {
     let alreadyTopmost = false;
     try {
       windowVisible = overlayWindow.isVisible();
-    } catch {}
+    } catch { }
     try {
       if (typeof overlayWindow.isAlwaysOnTop === "function") {
         alreadyTopmost = overlayWindow.isAlwaysOnTop() === true;
       }
-    } catch {}
+    } catch { }
 
     // Keep overlay non-focusable even if something outside toggles it.
     if (!windowVisible || !alreadyTopmost) {
@@ -3936,13 +3937,13 @@ function setOverlayPresented(next) {
       overlayWindow.setVisibleOnAllWorkspaces(true, {
         visibleOnFullScreen: true,
       });
-    } catch {}
+    } catch { }
     try {
       overlayWindow.setSkipTaskbar(true);
-    } catch {}
+    } catch { }
     try {
       overlayWindow.setFocusable(false);
-    } catch {}
+    } catch { }
     if (!windowVisible) {
       setOverlayWindowOpacitySafely(
         0,
@@ -3984,21 +3985,21 @@ function setOverlayPresented(next) {
   try {
     setOverlayWindowOpacitySafely(0, "setOverlayPresented:false:pre-hide");
     overlayWindow.setIgnoreMouseEvents(true, { forward: true });
-  } catch {}
+  } catch { }
   try {
     if (overlayWindow.isVisible()) {
       overlayWindow.hide();
     }
-  } catch {}
+  } catch { }
   try {
     overlayWindow.setVisibleOnAllWorkspaces(false);
-  } catch {}
+  } catch { }
   try {
     overlayWindow.setAlwaysOnTop(false);
-  } catch {}
+  } catch { }
   try {
     overlayWindow.blur();
-  } catch {}
+  } catch { }
   clearOverlayTopmostBoostTimer();
   overlayLogger.debug("overlay:hide:os-window-hidden", {
     reason: "compatibility-first-hide",
@@ -4034,11 +4035,11 @@ function getOverlayPositionContext() {
   let workArea = null;
   try {
     workArea = screen.getDisplayMatching(bounds)?.workArea || null;
-  } catch {}
+  } catch { }
   if (!workArea) {
     try {
       workArea = screen.getPrimaryDisplay()?.workArea || null;
-    } catch {}
+    } catch { }
   }
   if (!workArea) return null;
   return { bounds, workArea };
@@ -4254,7 +4255,7 @@ function applyOverlayKeyboardScrollShortcutRegistration() {
       clearOverlayKeyboardScrollShortcuts();
       return;
     }
-  } catch {}
+  } catch { }
 
   const registerAll = (baseId, accelerators, onFire) => {
     const registered = [];
@@ -4366,8 +4367,8 @@ function buildOverlayControllerRuntimeState(prefs = null, overrides = {}) {
     )
       ? Number(overrides.controlModeUserIndex)
       : Number.isFinite(
-            Number(overlayControllerRuntimeStateCache.controlModeUserIndex),
-          )
+        Number(overlayControllerRuntimeStateCache.controlModeUserIndex),
+      )
         ? Number(overlayControllerRuntimeStateCache.controlModeUserIndex)
         : null,
   };
@@ -4385,7 +4386,7 @@ function broadcastOverlayControllerRuntimeState(prefs = null, overrides = {}) {
         overlayControllerRuntimeStateCache,
       );
     }
-  } catch {}
+  } catch { }
   return overlayControllerRuntimeStateCache;
 }
 
@@ -4396,7 +4397,7 @@ function handleOverlayControllerAction(type, payload = {}) {
   if (action === "overlay.control-mode") {
     const controlModeUserIndex =
       Number.isFinite(Number(payload?.userIndex)) &&
-      Number(payload?.userIndex) >= 0
+        Number(payload?.userIndex) >= 0
         ? Number(payload?.userIndex)
         : null;
     controllerLogger.info("controller:overlay-control-mode", {
@@ -4470,7 +4471,7 @@ function syncOverlayControllerSupportState(reason, prefs = null) {
     controlModeActive: status?.controlModeActive === true,
     controlModeUserIndex:
       Number.isFinite(Number(status?.controlModeUserIndex)) &&
-      Number(status?.controlModeUserIndex) >= 0
+        Number(status?.controlModeUserIndex) >= 0
         ? Number(status.controlModeUserIndex)
         : null,
   });
@@ -4608,7 +4609,7 @@ function clearOverlayInteractShortcut() {
   ) {
     try {
       globalShortcut.unregister(registeredOverlayInteractShortcut);
-    } catch {}
+    } catch { }
   }
   registeredOverlayInteractShortcut = null;
   registeredOverlayInteractShortcutMode = null;
@@ -4656,17 +4657,17 @@ function registerOverlayInteractShortcut(newShortcut) {
       matchMode: "required",
       otherShortcuts: overlayShortcut
         ? [
-            {
-              id: "overlay-shortcut",
-              source: "overlay-shortcut",
-              scope: "user",
-              shortcut: overlayShortcut,
-              allowSingle: false,
-              matchMode: "required",
-              priority: OVERLAY_SHORTCUT_PRIORITY_TOGGLE,
-              target: "overlay-shortcut",
-            },
-          ]
+          {
+            id: "overlay-shortcut",
+            source: "overlay-shortcut",
+            scope: "user",
+            shortcut: overlayShortcut,
+            allowSingle: false,
+            matchMode: "required",
+            priority: OVERLAY_SHORTCUT_PRIORITY_TOGGLE,
+            target: "overlay-shortcut",
+          },
+        ]
         : [],
     });
     if (
@@ -4961,7 +4962,7 @@ function broadcastToAll(channel, payload) {
       if (!win.isDestroyed()) {
         win.webContents.send(channel, payload);
       }
-    } catch {}
+    } catch { }
   }
 }
 
@@ -5031,7 +5032,7 @@ if (!cachedPreferences || typeof cachedPreferences !== "object") {
 try {
   setBlacklistedAppIds(cachedPreferences?.[BLACKLIST_PREF_KEY]);
   setBlacklistedConfigKeys(cachedPreferences?.[BLACKLIST_CONFIG_PREF_KEY]);
-} catch {}
+} catch { }
 const fileSteamApiKey = readSteamApiKeyFromFile();
 if (fileSteamApiKey && !cachedPreferences.steamApiKey) {
   cachedPreferences.steamApiKey = fileSteamApiKey;
@@ -5085,12 +5086,12 @@ function applyPreferenceSideEffects(
   if (Object.prototype.hasOwnProperty.call(patch, BLACKLIST_PREF_KEY)) {
     try {
       setBlacklistedAppIds(prefsSnapshot?.[BLACKLIST_PREF_KEY]);
-    } catch {}
+    } catch { }
   }
   if (Object.prototype.hasOwnProperty.call(patch, BLACKLIST_CONFIG_PREF_KEY)) {
     try {
       setBlacklistedConfigKeys(prefsSnapshot?.[BLACKLIST_CONFIG_PREF_KEY]);
-    } catch {}
+    } catch { }
   }
   if ("language" in patch && typeof prefsSnapshot.language === "string") {
     selectedLanguage = prefsSnapshot.language;
@@ -5190,16 +5191,16 @@ function applyPreferenceSideEffects(
         selectedIsLumaPlay = isLumaPlayConfig(cfg);
         selectedLumaAppId = String(cfg?.appid || "");
       }
-    } catch {}
+    } catch { }
     const enabled = isLumaPlayWatcherEnabled(prefsSnapshot);
     if (!enabled) {
       try {
         stopActiveLumaPlayRegistryWatcher();
-      } catch {}
+      } catch { }
       if (selectedIsLumaPlay) {
         try {
           monitorAchievementsFile(null);
-        } catch {}
+        } catch { }
         achievementsFilePath = null;
       }
     } else {
@@ -5215,7 +5216,7 @@ function applyPreferenceSideEffects(
     const processWatcherEnabled = isProcessNameWatcherEnabled(prefsSnapshot);
     try {
       processPoller.setEnabled(processWatcherEnabled);
-    } catch {}
+    } catch { }
     if (!processWatcherEnabled) {
       stopAutoSelectProcessPoller();
       appLogger.info("process-poller:disabled-by-preferences");
@@ -5503,7 +5504,7 @@ async function runAchievementsGenerator(
     const logDir = path.join(app.getPath("userData"), "logs");
     try {
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    } catch {}
+    } catch { }
     const platform =
       typeof opts.platform === "string" && opts.platform.length
         ? opts.platform.toLowerCase()
@@ -5557,7 +5558,7 @@ async function runAchievementsGenerator(
               percent: clampGenerationPercent(msg.percent, 0),
             });
           }
-        } catch {}
+        } catch { }
         return;
       }
       if (msg.type !== "achgen:log") return;
@@ -5587,7 +5588,7 @@ async function ensureSchemaForApp(appid, platform = "steam", options = {}) {
         detail: String(progress.detail || ""),
         current:
           Number.isFinite(Number(progress.current)) &&
-          Number(progress.current) >= 0
+            Number(progress.current) >= 0
             ? Number(progress.current)
             : 0,
         total:
@@ -5596,7 +5597,7 @@ async function ensureSchemaForApp(appid, platform = "steam", options = {}) {
             : 0,
         percent: clampGenerationPercent(progress.percent, 0),
       });
-    } catch {}
+    } catch { }
   };
   if (!platform && /[a-f]/i.test(appidStr)) {
     platform = "epic";
@@ -5622,7 +5623,7 @@ async function ensureSchemaForApp(appid, platform = "steam", options = {}) {
   try {
     if (!fs.existsSync(schemaBase))
       fs.mkdirSync(schemaBase, { recursive: true });
-  } catch {}
+  } catch { }
   // if achievements schema exist
   if (fs.existsSync(achJson)) {
     ipcLogger.info("schema:ensure-exists", {
@@ -5991,17 +5992,17 @@ ipcMain.handle("steam-official:list-accounts", () => {
     loginUsersPath: catalog?.loginUsersPath || "",
     accounts: Array.isArray(catalog?.accounts)
       ? catalog.accounts.map((account) => ({
-          steamid64: account.steamid64,
-          accountId: account.accountId,
-          accountName: account.accountName,
-          personaName: account.personaName,
-          mostRecent: account.mostRecent === true,
-          label:
-            account.label ||
-            account.personaName ||
-            account.accountName ||
-            account.steamid64,
-        }))
+        steamid64: account.steamid64,
+        accountId: account.accountId,
+        accountName: account.accountName,
+        personaName: account.personaName,
+        mostRecent: account.mostRecent === true,
+        label:
+          account.label ||
+          account.personaName ||
+          account.accountName ||
+          account.steamid64,
+      }))
       : [],
   };
 });
@@ -6026,7 +6027,7 @@ function extractEpicAuthResult(rawUrl) {
         error: errorDescription || errorCode || "epic-auth-failed",
       };
     }
-  } catch {}
+  } catch { }
   try {
     const parsed = JSON.parse(raw);
     const code =
@@ -6039,7 +6040,7 @@ function extractEpicAuthResult(rawUrl) {
     );
     const redirectCode = normalizeEpicAuthCode(redirectMatch?.[1]);
     if (redirectCode) return { code: redirectCode };
-  } catch {}
+  } catch { }
   const codeMatch =
     raw.match(
       /localhost\/launcher\/authorized\?code=([a-zA-Z0-9_-]{20,256})/i,
@@ -6078,7 +6079,7 @@ async function clearEpicOfficialAuthSession(reason = "unknown") {
     });
     try {
       await authSession.clearCache();
-    } catch {}
+    } catch { }
     epicOfficialLogger.info("epic-official:auth-session:cleared", {
       reason,
       partition: EPIC_OFFICIAL_AUTH_PARTITION,
@@ -6100,7 +6101,7 @@ function waitForEpicAuthCode(parentWindow, authOptions = {}) {
       settled = true;
       try {
         if (authWindow && !authWindow.isDestroyed()) authWindow.close();
-      } catch {}
+      } catch { }
       fn(value);
     };
     try {
@@ -6156,7 +6157,7 @@ function waitForEpicAuthCode(parentWindow, authOptions = {}) {
           handleUrl(payload?.url);
           handleUrl(payload?.text);
           handleUrl(payload?.html);
-        } catch {}
+        } catch { }
       };
       authWindow.webContents.on("will-navigate", interceptAuthNavigation);
       authWindow.webContents.on("will-redirect", interceptAuthNavigation);
@@ -6366,7 +6367,7 @@ async function seedEpicOfficialImportCaches(imported = [], options = {}) {
       try {
         const parsed = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
         if (Array.isArray(parsed)) schemaAchievements = parsed;
-      } catch {}
+      } catch { }
       if (!schemaAchievements.length) {
         stats.skipped += 1;
         return;
@@ -6374,10 +6375,10 @@ async function seedEpicOfficialImportCaches(imported = [], options = {}) {
 
       let productId = String(
         config?.epic_product_id ||
-          config?.epicProductId ||
-          config?.appid ||
-          entry?.appid ||
-          "",
+        config?.epicProductId ||
+        config?.appid ||
+        entry?.appid ||
+        "",
       ).trim();
       try {
         const sidecarPath = path.join(
@@ -6388,7 +6389,7 @@ async function seedEpicOfficialImportCaches(imported = [], options = {}) {
           const sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
           if (sidecar?.appid) productId = String(sidecar.appid).trim();
         }
-      } catch {}
+      } catch { }
       const resolvedAccountId =
         accountId || resolvePreferredEpicOfficialAccountId(config, token);
       const cached =
@@ -6503,12 +6504,12 @@ ipcMain.handle("epic-official:import-library", async () => {
             detail: progress?.detail || "",
             current:
               Number.isFinite(Number(progress?.current)) &&
-              Number(progress.current) >= 0
+                Number(progress.current) >= 0
                 ? Number(progress.current)
                 : 0,
             total:
               Number.isFinite(Number(progress?.total)) &&
-              Number(progress.total) >= 0
+                Number(progress.total) >= 0
                 ? Number(progress.total)
                 : 0,
             percent: clampGenerationPercent(progress?.percent, 5),
@@ -6528,12 +6529,12 @@ ipcMain.handle("epic-official:import-library", async () => {
           detail: progress?.detail || "Seeding Epic Official cache",
           current:
             Number.isFinite(Number(progress?.current)) &&
-            Number(progress.current) >= 0
+              Number(progress.current) >= 0
               ? Number(progress.current)
               : 0,
           total:
             Number.isFinite(Number(progress?.total)) &&
-            Number(progress.total) >= 0
+              Number(progress.total) >= 0
               ? Number(progress.total)
               : 0,
           percent: clampGenerationPercent(progress?.percent, 90),
@@ -6627,9 +6628,9 @@ ipcMain.handle("config:get-by-appid", async (_event, appid) => {
             appid: cfgAppId,
           };
         }
-      } catch {}
+      } catch { }
     }
-  } catch {}
+  } catch { }
   return null;
 });
 
@@ -6699,7 +6700,7 @@ ipcMain.handle("ui:confirm", async (e, { title, message, detail }) => {
         if (!win.isVisible()) win.show();
         win.focus();
       }
-    } catch {}
+    } catch { }
     appLogger.info("ui:confirm:dispatch", {
       parent: canParent,
       packaged: app.isPackaged,
@@ -6729,7 +6730,7 @@ ipcMain.handle("ui:refocus", (e) => {
         win.focus();
       }
     }, 0);
-  } catch {}
+  } catch { }
 });
 
 // dashboard visibility & refresh
@@ -6750,7 +6751,7 @@ function requestDashboardRefresh() {
   dashboardRefreshTimer = setTimeout(() => {
     try {
       broadcastToAll("dashboard:refresh");
-    } catch {}
+    } catch { }
   }, 350);
 }
 
@@ -6758,7 +6759,7 @@ ipcMain.handle("dashboard:set-open", (_e, state) => {
   dashboardOpen = !!state;
   try {
     global.dashboardOpen = dashboardOpen;
-  } catch {}
+  } catch { }
   if (dashboardOpen && pendingDashboardRefresh) {
     requestDashboardRefresh();
   }
@@ -6878,7 +6879,7 @@ ipcMain.handle("saveConfig", async (event, config) => {
     if (fs.existsSync(filePath)) {
       try {
         prevConfig = JSON.parse(fs.readFileSync(filePath, "utf8"));
-      } catch {}
+      } catch { }
     }
 
     const exePath = isNonEmptyString(config.executable)
@@ -7029,7 +7030,7 @@ ipcMain.handle("saveConfig", async (event, config) => {
           payload.save_path = selForSave; // fallback
         }
       }
-    } catch {}
+    } catch { }
 
     // 3) Create config
     fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
@@ -7125,12 +7126,12 @@ ipcMain.handle("saveConfig", async (event, config) => {
                   detail: progress?.detail || "",
                   current:
                     Number.isFinite(Number(progress?.current)) &&
-                    Number(progress.current) >= 0
+                      Number(progress.current) >= 0
                       ? Number(progress.current)
                       : 0,
                   total:
                     Number.isFinite(Number(progress?.total)) &&
-                    Number(progress.total) >= 0
+                      Number(progress.total) >= 0
                       ? Number(progress.total)
                       : 0,
                   percent: clampGenerationPercent(progress?.percent, 5),
@@ -7291,7 +7292,7 @@ ipcMain.handle("loadConfigs", () => {
         raw.platform = platformNorm;
         try {
           fs.writeFileSync(fullPath, JSON.stringify(raw, null, 2));
-        } catch {}
+        } catch { }
       }
       if (raw?.displayName) {
         meta.displayName =
@@ -7429,7 +7430,7 @@ function resolveSteamAppIdForRarity(config = {}) {
       try {
         hydrateRuntimeMapping(loadRuntimeUplayMap());
         mapping = uplayToSteam.get(localAppId);
-      } catch {}
+      } catch { }
     }
     const steamAppId =
       sanitizeAppId(config?.steamAppId) ||
@@ -7746,14 +7747,14 @@ ipcMain.handle(
           const snapshot =
             progressPath && fs.existsSync(progressPath)
               ? ps4Trophy.buildSnapshotFromPs4ProgressFile(
-                  progressPath,
-                  previous,
-                )
+                progressPath,
+                previous,
+              )
               : (() => {
-                  const parsed = ps4Trophy.parsePs4TrophySetDir(trophyDir);
-                  parsed.appid = config.appid || parsed.appid;
-                  return ps4Trophy.buildSnapshotFromPs4(parsed, previous);
-                })();
+                const parsed = ps4Trophy.parsePs4TrophySetDir(trophyDir);
+                parsed.appid = config.appid || parsed.appid;
+                return ps4Trophy.buildSnapshotFromPs4(parsed, previous);
+              })();
           return {
             achievements: snapshot || {},
             save_path: progressPath || trophyDir,
@@ -7790,7 +7791,7 @@ ipcMain.handle(
             config.lumaplay_user = parsed.user;
             try {
               fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            } catch {}
+            } catch { }
           }
           const snapshot =
             parsed?.snapshot && Object.keys(parsed.snapshot).length
@@ -7851,7 +7852,7 @@ ipcMain.handle(
             config.gog_gameplay_db = gameplayDbPath;
             try {
               fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            } catch {}
+            } catch { }
           }
 
           return {
@@ -7912,13 +7913,13 @@ ipcMain.handle(
           try {
             const parsed = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
             if (Array.isArray(parsed)) schemaAchievements = parsed;
-          } catch {}
+          } catch { }
         }
         let productId = String(
           config?.epic_product_id ||
-            config?.epicProductId ||
-            config?.appid ||
-            "",
+          config?.epicProductId ||
+          config?.appid ||
+          "",
         ).trim();
         if (schemaPath) {
           try {
@@ -7930,7 +7931,7 @@ ipcMain.handle(
               const sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
               if (sidecar?.appid) productId = String(sidecar.appid).trim();
             }
-          } catch {}
+          } catch { }
         }
         const syncKey = buildEpicOfficialLoadSyncKey(
           configName,
@@ -8074,7 +8075,7 @@ ipcMain.handle(
               config.epic_product_id = nextProductId;
               try {
                 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-              } catch {}
+              } catch { }
             }
             const result = {
               achievements: snapshot || {},
@@ -8155,7 +8156,7 @@ ipcMain.handle(
             config.ubisoft_spool_file = spoolFilePath;
             try {
               fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            } catch {}
+            } catch { }
           }
           return {
             achievements: merged || snapshot || {},
@@ -8216,8 +8217,8 @@ ipcMain.handle(
           const nextExecutable = entry?.exePath || config?.executable || "";
           const nextProcessName = normalizeProcessNameValue(
             entry?.processName ||
-              config?.process_name ||
-              (nextExecutable ? path.basename(nextExecutable) : ""),
+            config?.process_name ||
+            (nextExecutable ? path.basename(nextExecutable) : ""),
           );
           if (
             nextSavePath !== config.save_path ||
@@ -8237,7 +8238,7 @@ ipcMain.handle(
             config.process_name = nextProcessName;
             try {
               fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            } catch {}
+            } catch { }
           }
 
           return {
@@ -8261,17 +8262,17 @@ ipcMain.handle(
             : [];
         const entries = Array.isArray(schemaArr)
           ? schemaArr
-              .map((e) => ({
-                api: e?.name || e?.api,
-                statId: e?.statId,
-                bit: e?.bit,
-              }))
-              .filter(
-                (e) =>
-                  e.api &&
-                  Number.isInteger(e.statId) &&
-                  Number.isInteger(e.bit),
-              )
+            .map((e) => ({
+              api: e?.name || e?.api,
+              statId: e?.statId,
+              bit: e?.bit,
+            }))
+            .filter(
+              (e) =>
+                e.api &&
+                Number.isInteger(e.statId) &&
+                Number.isInteger(e.bit),
+            )
           : [];
         const statsDir = config.save_path || "";
         const cached =
@@ -8283,10 +8284,10 @@ ipcMain.handle(
         const userBin =
           statsDir && config.appid
             ? pickConfiguredSteamOfficialUserBin(
-                statsDir,
-                config.appid,
-                cachedPreferences,
-              )
+              statsDir,
+              config.appid,
+              cachedPreferences,
+            )
             : null;
         const hasPinnedSteamOfficialAccount = !!normalizeSteamOfficialSteamId(
           cachedPreferences?.steamOfficialSteamId,
@@ -8479,13 +8480,13 @@ ipcMain.handle("delete-config", async (_event, payload) => {
       }
       const appid = needsConfigData
         ? sanitizeAppId(configData?.appid) ||
-          sanitizeAppId(configData?.appId) ||
-          sanitizeAppId(configData?.steamAppId) ||
-          ""
+        sanitizeAppId(configData?.appId) ||
+        sanitizeAppId(configData?.steamAppId) ||
+        ""
         : "";
       const inferredConfigPlatform = needsConfigData
         ? inferOfficialPlatformFromMarkers(configData) ||
-          normalizePlatform(configData?.platform)
+        normalizePlatform(configData?.platform)
         : "";
       const platform = needsConfigData
         ? inferredConfigPlatform || getPlatformForAppId(appid) || "steam"
@@ -8702,7 +8703,7 @@ ipcMain.handle("delete-config", async (_event, payload) => {
           } else if (platform === "shadps4") {
             const trophyDir =
               typeof configData?.trophy_path === "string" &&
-              configData.trophy_path
+                configData.trophy_path
                 ? configData.trophy_path
                 : saveBase;
             if (trophyDir) {
@@ -8810,13 +8811,13 @@ ipcMain.handle("config:blacklist", async (_event, payload = {}) => {
     if (removeFlag) {
       try {
         ipcMain.emit("blacklist:removed-appid", null, resolvedAppId);
-      } catch {}
+      } catch { }
     }
 
     refreshBlacklistEffects();
     try {
       broadcastToAll("blacklist:updated", updatedList);
-    } catch {}
+    } catch { }
 
     ipcLogger.info("config:blacklist:success", {
       configName: safeName || null,
@@ -8858,12 +8859,12 @@ ipcMain.handle("blacklist:reset", async () => {
     ) {
       try {
         ipcMain.emit("blacklist:removed-appid", null, null);
-      } catch {}
+      } catch { }
     }
     refreshBlacklistEffects();
     try {
       broadcastToAll("blacklist:updated", buildBlacklistPayload());
-    } catch {}
+    } catch { }
     ipcLogger.info("blacklist:reset:success", {
       count: (before?.appids?.length || 0) + (before?.configKeys?.length || 0),
     });
@@ -8908,10 +8909,10 @@ ipcMain.handle("schema:regenerate", async (event, payload) => {
 
     const rawAppId = String(
       payload?.appid ||
-        config?.appid ||
-        config?.appId ||
-        config?.steamAppId ||
-        "",
+      config?.appid ||
+      config?.appId ||
+      config?.steamAppId ||
+      "",
     ).trim();
 
     let platform =
@@ -9076,12 +9077,12 @@ ipcMain.handle("schema:regenerate", async (event, payload) => {
                 detail: progress?.detail || "",
                 current:
                   Number.isFinite(Number(progress?.current)) &&
-                  Number(progress.current) >= 0
+                    Number(progress.current) >= 0
                     ? Number(progress.current)
                     : 0,
                 total:
                   Number.isFinite(Number(progress?.total)) &&
-                  Number(progress.total) >= 0
+                    Number(progress.total) >= 0
                     ? Number(progress.total)
                     : 0,
                 percent: 18 + Math.round(childPercent * 0.72),
@@ -9121,7 +9122,7 @@ ipcMain.handle("schema:regenerate", async (event, payload) => {
             current.epic_namespace = schemaResult.sandboxId;
           }
           fs.writeFileSync(cfgFile, JSON.stringify(current, null, 2));
-        } catch {}
+        } catch { }
       }
       progressJob?.update({
         phase: "finalizing",
@@ -9225,9 +9226,16 @@ function getUserPreferredSound() {
 let tray = null;
 let trayMenuWindow = null;
 let isQuitting = false;
-const ICON_PATH = app.isPackaged
-  ? path.join(process.resourcesPath, "icon.ico") // in installer: resources\icon.ico
-  : path.join(__dirname, "icon.ico");
+
+let icon = process.platform === "win32" ? "icon.ico" : "icon.png"
+
+let ICON_PATH
+
+ICON_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, icon) // in installer: resources\icon.png
+  : path.join(__dirname, icon);
+
+
 const ICON_PNG_PATH = app.isPackaged
   ? path.join(app.getAppPath(), "assets", "icon.png") // in installer: resources\app.asar\assets\icon.png
   : path.join(__dirname, "assets", "icon.png");
@@ -9254,7 +9262,7 @@ function getTrayScaleFactor() {
       const bounds = tray.getBounds();
       return screen.getDisplayNearestPoint(bounds)?.scaleFactor || 1;
     }
-  } catch {}
+  } catch { }
   return screen.getPrimaryDisplay()?.scaleFactor || 1;
 }
 
@@ -9295,7 +9303,7 @@ function getDisplayScaleForBounds(bounds) {
     if (bounds) {
       return screen.getDisplayMatching(bounds)?.scaleFactor || 1;
     }
-  } catch {}
+  } catch { }
   return screen.getPrimaryDisplay()?.scaleFactor || 1;
 }
 
@@ -9416,6 +9424,7 @@ function positionTrayMenu() {
   if (!tray || !trayMenuWindow || trayMenuWindow.isDestroyed()) return;
   applyTrayMenuScale();
   const trayBounds = tray.getBounds();
+
   const winBounds = trayMenuWindow.getBounds();
   const display = screen.getDisplayNearestPoint({
     x: trayBounds.x,
@@ -9480,7 +9489,7 @@ function emitBootOnboardingShowToMain(reason = "manual", extra = {}) {
   const sendShow = () => {
     try {
       mainWindow.webContents.send("boot:onboarding:show", payload);
-    } catch {}
+    } catch { }
   };
   if (mainWindow.webContents.isLoading()) {
     mainWindow.webContents.once("did-finish-load", sendShow);
@@ -9509,7 +9518,7 @@ function scheduleBootOnboardingUiRecovery(reason = "unknown", extra = {}) {
         if (mainWindow.webContents?.isCrashed?.()) {
           mainWindow.webContents.reload();
         }
-      } catch {}
+      } catch { }
       showMainWindowRespectingPrefs();
     }
     emitBootOnboardingShowToMain(reason, extra);
@@ -9541,16 +9550,44 @@ function createTray() {
   tray.setToolTip("Achievements App");
   createTrayMenuWindow();
 
-  tray.on("click", () => {
-    toggleTrayMenu();
-  });
-  tray.on("right-click", () => {
-    toggleTrayMenu();
-  });
-  tray.on("double-click", () => {
-    hideTrayMenu();
-    showMainWindowRespectingPrefs();
-  });
+  if (process.platform === "win32") {
+    tray.on("click", () => {
+      toggleTrayMenu();
+    });
+    tray.on("right-click", () => {
+      toggleTrayMenu();
+    });
+    tray.on("double-click", () => {
+      hideTrayMenu();
+      showMainWindowRespectingPrefs();
+    });
+  }
+  else {
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show',
+        click: () => {
+          showMainWindowRespectingPrefs();
+        },
+      },
+      {
+        click: () => {
+          openSettingsFromTray();
+        },
+        label: 'Settings',
+      },
+      { type: 'separator' },
+      {
+        click: () => {
+          exitFromTray = true;
+          app.quit();
+        },
+        label: 'Quit',
+      },
+    ]);
+
+    tray.setContextMenu(contextMenu);
+  }
 }
 
 let achievementsFilePath; // achievements.json path
@@ -9569,11 +9606,12 @@ function createMainWindow(options = {}) {
       ? JSON.parse(fs.readFileSync(preferencesPath, "utf-8"))
       : {};
     initialZoom = Number(prefs.windowZoomFactor) || 1;
-  } catch {}
+  } catch { }
   mainWindowUserZoom = initialZoom;
   const initialScale = getDisplayScaleForBounds();
   const initialZoomFactor = initialZoom / (initialScale || 1);
   mainWindow = new BrowserWindow({
+    icon: ICON_PATH,
     width: 1000,
     height: 1000,
     frame: false,
@@ -9665,7 +9703,7 @@ function createMainWindow(options = {}) {
   const refreshOverlayKeyboardScrollShortcuts = () => {
     try {
       applyOverlayKeyboardScrollShortcutRegistration();
-    } catch {}
+    } catch { }
   };
   mainWindow.on("focus", refreshOverlayKeyboardScrollShortcuts);
   mainWindow.on("blur", refreshOverlayKeyboardScrollShortcuts);
@@ -9979,7 +10017,7 @@ ipcMain.handle("checkLocalGameImage", async (_event, appid, platformArg) => {
       imagePath: newPath,
     });
     return newPath;
-  } catch {}
+  } catch { }
   for (const candidatePlatform of candidatePlatforms) {
     if (candidatePlatform === platform) continue;
     const candidatePath = path.join(
@@ -9995,7 +10033,7 @@ ipcMain.handle("checkLocalGameImage", async (_event, appid, platformArg) => {
         if (!fs.existsSync(newPath)) {
           fs.copyFileSync(candidatePath, newPath);
         }
-      } catch {}
+      } catch { }
       ipcLogger.info("checkLocalGameImage:platform-alias-hit", {
         appid,
         platform,
@@ -10003,7 +10041,7 @@ ipcMain.handle("checkLocalGameImage", async (_event, appid, platformArg) => {
         imagePath: candidatePath,
       });
       return fs.existsSync(newPath) ? newPath : candidatePath;
-    } catch {}
+    } catch { }
   }
   try {
     await fs.promises.access(legacyPath, fs.constants.F_OK);
@@ -10012,14 +10050,14 @@ ipcMain.handle("checkLocalGameImage", async (_event, appid, platformArg) => {
       if (!fs.existsSync(newPath)) {
         fs.copyFileSync(legacyPath, newPath);
       }
-    } catch {}
+    } catch { }
     ipcLogger.info("checkLocalGameImage:legacy-hit", {
       appid,
       platform,
       imagePath: legacyPath,
     });
     return fs.existsSync(newPath) ? newPath : legacyPath;
-  } catch {}
+  } catch { }
   ipcLogger.info("checkLocalGameImage:miss", { appid, platform });
   return null;
 });
@@ -10580,7 +10618,7 @@ function stopActiveLumaPlayRegistryWatcher() {
   if (!activeLumaPlayRegistryWatcher) return;
   try {
     activeLumaPlayRegistryWatcher.stop();
-  } catch {}
+  } catch { }
   activeLumaPlayRegistryWatcher = null;
 }
 
@@ -10659,16 +10697,16 @@ const achCacheMetaPath = (() => {
       const dir = app.getPath("userData");
       if (dir) return path.join(dir, "ach_cache_meta.json");
     }
-  } catch {}
+  } catch { }
   if (preferencesPath) {
     try {
       return path.join(path.dirname(preferencesPath), "ach_cache_meta.json");
-    } catch {}
+    } catch { }
   }
   if (configsDir) {
     try {
       return path.join(path.dirname(configsDir), "ach_cache_meta.json");
-    } catch {}
+    } catch { }
   }
   return "";
 })();
@@ -10705,7 +10743,7 @@ function loadAchCacheMetaOnce() {
       if (!Number.isFinite(mtimeMs) || !Number.isFinite(size)) continue;
       achCacheMeta.set(key, { mtimeMs, size });
     }
-  } catch {}
+  } catch { }
 }
 
 function getAchCacheMetaKey(configName, platform, filePath, appid = "") {
@@ -10753,7 +10791,7 @@ function scheduleAchCacheMetaSave() {
       };
       fs.mkdirSync(path.dirname(achCacheMetaPath), { recursive: true });
       fs.writeFileSync(achCacheMetaPath, JSON.stringify(payload, null, 2));
-    } catch {}
+    } catch { }
   }, 500);
 }
 
@@ -10786,7 +10824,7 @@ function resolveBootSeedCandidatePath(config) {
       candidatePath = savePathRaw;
       saveRoot = path.dirname(savePathRaw);
     }
-  } catch {}
+  } catch { }
   if (!candidatePath) {
     if (!fs.existsSync(saveRoot)) return null;
     const appid = String(config?.appid || "").trim();
@@ -10874,7 +10912,7 @@ const cacheBatchTotals = {
 let cacheBatchTimer = null;
 try {
   global.bootManualSeedComplete = false;
-} catch {}
+} catch { }
 
 function hasCacheBatchPending() {
   return (
@@ -10923,7 +10961,7 @@ function markBootManualSeedComplete() {
   bootManualSeedComplete = true;
   try {
     global.bootManualSeedComplete = true;
-  } catch {}
+  } catch { }
   scheduleOverlayDragHookAfterBootComplete();
   flushCacheBatchWindow("boot-manual-seed-complete");
   persistenceLogger.info("load-achievement-cache:summary", {
@@ -10932,10 +10970,10 @@ function markBootManualSeedComplete() {
   });
   try {
     broadcastToAll("boot:manual-seed-complete", { complete: true });
-  } catch {}
+  } catch { }
   try {
     bootManualSeedCompletionResolve?.();
-  } catch {}
+  } catch { }
   bootManualSeedCompletionResolve = null;
 }
 
@@ -10998,7 +11036,7 @@ function markCacheSeedKeyFromName(configName) {
     try {
       const data = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
       return markCacheSeedKeyFromConfig(data);
-    } catch {}
+    } catch { }
   }
   const fallback = `name:${safeName}`;
   bootSeededCacheKeys.add(fallback);
@@ -11157,14 +11195,14 @@ async function loadPreviousAchievements(
             if (!fs.existsSync(cachePath)) {
               fs.copyFileSync(altPath, cachePath);
             }
-          } catch {}
+          } catch { }
           return data;
         } catch {
           bumpCacheBatchStat("errors");
         }
       }
     }
-  } catch {}
+  } catch { }
 
   bumpCacheBatchStat("misses");
   return {};
@@ -11261,10 +11299,10 @@ function savePreviousAchievements(
       shadps4UserId:
         normalizedPlatform === "shadps4"
           ? resolveShadPs4AchievementCacheUserId(
-              configName,
-              normalizedPlatform,
-              effectiveOptions,
-            ) || null
+            configName,
+            normalizedPlatform,
+            effectiveOptions,
+          ) || null
           : null,
       count: data ? Object.keys(data).length : 0,
     });
@@ -11409,7 +11447,7 @@ async function monitorAchievementsFile(filePath) {
       for (const fp of extraAchievementFiles) {
         try {
           fs.unwatchFile(fp);
-        } catch {}
+        } catch { }
       }
       extraAchievementFiles.clear();
     }
@@ -11450,7 +11488,7 @@ async function monitorAchievementsFile(filePath) {
     for (const fp of extraAchievementFiles) {
       try {
         fs.unwatchFile(fp);
-      } catch {}
+      } catch { }
     }
     extraAchievementFiles.clear();
   }
@@ -11511,7 +11549,7 @@ async function monitorAchievementsFile(filePath) {
       .endsWith(".xml");
   const selectedPs4ProgressPath = isPs4
     ? (isPs4ProgressXmlPath(filePath) ? filePath : "") ||
-      resolvePs4ProgressPathForConfig(configMeta)
+    resolvePs4ProgressPathForConfig(configMeta)
     : "";
   const currentCacheOptions = {
     appid: configMeta?.appid || currentAppId || "",
@@ -11578,16 +11616,16 @@ async function monitorAchievementsFile(filePath) {
         userId,
         progressPath,
       });
-    } catch {}
+    } catch { }
   };
   if (isPs4 && configMeta?.shadps4_npcommid) {
     const root = resolveShadPs4RootForConfig(configMeta);
     const progressFiles = root
       ? collectPs4ProgressFilesForConfig(
-          root,
-          configMeta.shadps4_npcommid,
-          String(configMeta?.shadps4_user_id || "").trim(),
-        )
+        root,
+        configMeta.shadps4_npcommid,
+        String(configMeta?.shadps4_user_id || "").trim(),
+      )
       : [];
     if (
       selectedPs4ProgressPath &&
@@ -11625,7 +11663,7 @@ async function monitorAchievementsFile(filePath) {
   const isEaOfficial =
     normalizePlatform(configMeta?.platform) === "ea-official" ||
     path.basename(String(filePath || "")).toLowerCase() ===
-      EA_VERBOSE_LOG_NAME.toLowerCase();
+    EA_VERBOSE_LOG_NAME.toLowerCase();
   const isUbisoftOfficial =
     normalizePlatform(configMeta?.platform) === "ubisoft-official" ||
     /\.spool$/i.test(String(filePath || ""));
@@ -11659,7 +11697,7 @@ async function monitorAchievementsFile(filePath) {
     const activeFilePath = sourceFilePath || filePath;
     const activePs4ProgressPath = isPs4
       ? (isPs4ProgressXmlPath(activeFilePath) ? activeFilePath : "") ||
-        selectedPs4ProgressPath
+      selectedPs4ProgressPath
       : "";
     const activeCacheOptions = isPs4
       ? makePs4CacheOptionsForPath(activeFilePath)
@@ -11703,17 +11741,17 @@ async function monitorAchievementsFile(filePath) {
             : [];
         const entries = Array.isArray(schemaArr)
           ? schemaArr
-              .map((e) => ({
-                api: e?.name || e?.api,
-                statId: e?.statId,
-                bit: e?.bit,
-              }))
-              .filter(
-                (e) =>
-                  e.api &&
-                  Number.isInteger(e.statId) &&
-                  Number.isInteger(e.bit),
-              )
+            .map((e) => ({
+              api: e?.name || e?.api,
+              statId: e?.statId,
+              bit: e?.bit,
+            }))
+            .filter(
+              (e) =>
+                e.api &&
+                Number.isInteger(e.statId) &&
+                Number.isInteger(e.bit),
+            )
           : [];
         let userBin = activeFilePath;
         const base = path.basename(userBin || "").toLowerCase();
@@ -11790,7 +11828,7 @@ async function monitorAchievementsFile(filePath) {
                 fs.writeFileSync(configFile, JSON.stringify(cfg, null, 2));
               }
             }
-          } catch {}
+          } catch { }
         }
         if (parsed?.found === false) {
           lumaPlayReadFailed = true;
@@ -11969,15 +12007,15 @@ async function monitorAchievementsFile(filePath) {
             displayName:
               typeof achievementConfig.displayName === "object"
                 ? achievementConfig.displayName[lang] ||
-                  achievementConfig.displayName.english ||
-                  Object.values(achievementConfig.displayName)[0]
+                achievementConfig.displayName.english ||
+                Object.values(achievementConfig.displayName)[0]
                 : achievementConfig.displayName,
 
             description:
               typeof achievementConfig.description === "object"
                 ? achievementConfig.description[lang] ||
-                  achievementConfig.description.english ||
-                  Object.values(achievementConfig.description)[0]
+                achievementConfig.description.english ||
+                Object.values(achievementConfig.description)[0]
                 : achievementConfig.description,
             icon: achievementConfig.icon,
             icon_gray:
@@ -12178,10 +12216,10 @@ async function monitorAchievementsFile(filePath) {
       const progressFiles =
         root && npcommid
           ? collectPs4ProgressFilesForConfig(
-              root,
-              npcommid,
-              String(configMeta?.shadps4_user_id || "").trim(),
-            )
+            root,
+            npcommid,
+            String(configMeta?.shadps4_user_id || "").trim(),
+          )
           : [];
       const watchSet = new Set();
       for (const entry of progressFiles) {
@@ -12208,7 +12246,7 @@ async function monitorAchievementsFile(filePath) {
 
         try {
           fs.unwatchFile(primary);
-        } catch {}
+        } catch { }
         achievementsWatcher = () =>
           processSnapshot(false, primary, { updatePs4User: true });
         fs.watchFile(primary, { interval: 1000 }, achievementsWatcher);
@@ -12222,7 +12260,7 @@ async function monitorAchievementsFile(filePath) {
           }
           try {
             fs.unwatchFile(fp);
-          } catch {}
+          } catch { }
           extraAchievementFiles.add(fp);
           fs.watchFile(fp, { interval: 1000 }, () =>
             processSnapshot(false, fp, { updatePs4User: true }),
@@ -12238,7 +12276,7 @@ async function monitorAchievementsFile(filePath) {
 
       try {
         fs.unwatchFile(filePath);
-      } catch {}
+      } catch { }
       fs.watchFile(filePath, { interval: 1000 }, achievementsWatcher);
       achievementMonitorTimer = null;
     } else {
@@ -12738,10 +12776,10 @@ ipcMain.on(
       const userBin =
         statsDir && appid
           ? pickConfiguredSteamOfficialUserBin(
-              statsDir,
-              appid,
-              cachedPreferences,
-            )
+            statsDir,
+            appid,
+            cachedPreferences,
+          )
           : null;
       achievementsFilePath = userBin || null;
       if (!userBin || !fs.existsSync(userBin)) {
@@ -12812,7 +12850,7 @@ ipcMain.on(
           resolved.gameplayDbPath || config.gog_gameplay_db || "";
         try {
           fs.writeFileSync(cfgFile, JSON.stringify(config, null, 2));
-        } catch {}
+        } catch { }
       }
       if (!achievementsFilePath || !fs.existsSync(achievementsFilePath)) {
         monitorAchievementsFile(null);
@@ -12862,7 +12900,7 @@ ipcMain.on(
           resolved.spoolFilePath || config.ubisoft_spool_file || "";
         try {
           fs.writeFileSync(cfgFile, JSON.stringify(config, null, 2));
-        } catch {}
+        } catch { }
       }
       if (!achievementsFilePath || !fs.existsSync(achievementsFilePath)) {
         monitorAchievementsFile(null);
@@ -12905,11 +12943,11 @@ ipcMain.on(
       const entry =
         appid && resolved?.logFilePath
           ? resolveEaOfficialAchievementSetForAppId(appid, {
-              achievementSet: config?.ea_achievement_set || "",
-              savePath: resolved.logsRoot || config.save_path || "",
-              logFilePath: resolved.logFilePath,
-              parsedLog: parsed,
-            })
+            achievementSet: config?.ea_achievement_set || "",
+            savePath: resolved.logsRoot || config.save_path || "",
+            logFilePath: resolved.logFilePath,
+            parsedLog: parsed,
+          })
           : null;
       achievementsFilePath = resolved?.logFilePath || null;
       if (
@@ -12917,18 +12955,18 @@ ipcMain.on(
         (config.save_path !== (resolved.logsRoot || config.save_path || "") ||
           (config.ea_log_file || "") !== (resolved.logFilePath || "") ||
           (config.ea_achievement_set || "") !==
-            (entry?.achievementSet || config.ea_achievement_set || "") ||
+          (entry?.achievementSet || config.ea_achievement_set || "") ||
           (config.ea_offer_id || "") !==
-            (entry?.offerId || config.ea_offer_id || "") ||
+          (entry?.offerId || config.ea_offer_id || "") ||
           (config.ea_install_path || "") !==
-            (entry?.installPath || config.ea_install_path || "") ||
+          (entry?.installPath || config.ea_install_path || "") ||
           (config.executable || "") !==
-            (entry?.exePath || config.executable || "") ||
+          (entry?.exePath || config.executable || "") ||
           !processNameValuesEqual(
             config.process_name,
             entry?.processName ||
-              config.process_name ||
-              (entry?.exePath ? path.basename(entry.exePath) : ""),
+            config.process_name ||
+            (entry?.exePath ? path.basename(entry.exePath) : ""),
           ))
       ) {
         config.save_path = resolved.logsRoot || config.save_path || "";
@@ -12941,12 +12979,12 @@ ipcMain.on(
         config.executable = entry?.exePath || config.executable || "";
         config.process_name = normalizeProcessNameValue(
           entry?.processName ||
-            config.process_name ||
-            (entry?.exePath ? path.basename(entry.exePath) : ""),
+          config.process_name ||
+          (entry?.exePath ? path.basename(entry.exePath) : ""),
         );
         try {
           fs.writeFileSync(cfgFile, JSON.stringify(config, null, 2));
-        } catch {}
+        } catch { }
       }
       if (!achievementsFilePath || !fs.existsSync(achievementsFilePath)) {
         monitorAchievementsFile(null);
@@ -13022,10 +13060,10 @@ ipcMain.on(
       const c2 =
         config.appid != null
           ? path.join(
-              selectedConfigPath,
-              String(config.appid),
-              "achievements.json",
-            )
+            selectedConfigPath,
+            String(config.appid),
+            "achievements.json",
+          )
           : null;
 
       if (c1 && fs.existsSync(c1)) {
@@ -13073,7 +13111,7 @@ ipcMain.on(
               ? data.config_path
               : null;
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -13105,7 +13143,7 @@ async function waitForPathExists(p, tries = 50, delay = 60) {
     const tick = (n) => {
       try {
         if (fs.existsSync(p)) return resolve(true);
-      } catch {}
+      } catch { }
       if (n <= 0) return resolve(false);
       setTimeout(() => tick(n - 1), delay);
     };
@@ -13200,9 +13238,9 @@ ipcMain.handle("get-config-by-name", async (_event, name) => {
         data.platform = normalizedInferredPlatform;
         try {
           fs.writeFileSync(configPath, JSON.stringify(data, null, 2));
-        } catch {}
+        } catch { }
       }
-    } catch {}
+    } catch { }
 
     const appid = String(data?.appid || data?.appId || data?.steamAppId || "");
     const hasAppId = /^[0-9a-fA-F]+$/.test(appid);
@@ -13243,7 +13281,7 @@ ipcMain.handle("get-config-by-name", async (_event, name) => {
             fs.renameSync(candidate.dir, platformDir);
             candidate.dir = platformDir;
             candidate.file = path.join(platformDir, "achievements.json");
-          } catch {}
+          } catch { }
         }
         if (!fs.existsSync(candidate.file)) {
           await waitForPathExists(candidate.file, 40, 60);
@@ -13260,7 +13298,7 @@ ipcMain.handle("get-config-by-name", async (_event, name) => {
               fs.writeFileSync(configPath, JSON.stringify(now, null, 2));
               data = now;
             }
-          } catch {}
+          } catch { }
           foundSchemaPath = candidate.file;
           break;
         }
@@ -13281,10 +13319,10 @@ ipcMain.handle("get-config-by-name", async (_event, name) => {
                 fs.writeFileSync(configPath, JSON.stringify(now, null, 2));
                 data = now;
               }
-            } catch {}
+            } catch { }
           }
         }
-      } catch {}
+      } catch { }
     }
 
     const schemaReady =
@@ -13325,7 +13363,7 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
     if (fs.existsSync(oldConfigPath)) {
       try {
         prevConfig = JSON.parse(fs.readFileSync(oldConfigPath, "utf8"));
-      } catch {}
+      } catch { }
     }
 
     if (safeOld !== safeNew && fs.existsSync(oldConfigPath)) {
@@ -13355,8 +13393,8 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
         splitString: true,
       })
         ? normalizeProcessNameValue(newConfig.process_name, {
-            splitString: true,
-          })
+          splitString: true,
+        })
         : exePath
           ? path.basename(exePath)
           : "",
@@ -13424,12 +13462,12 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
         detail: progress?.detail || "",
         current:
           Number.isFinite(Number(progress?.current)) &&
-          Number(progress.current) >= 0
+            Number(progress.current) >= 0
             ? Number(progress.current)
             : 0,
         total:
           Number.isFinite(Number(progress?.total)) &&
-          Number(progress.total) >= 0
+            Number(progress.total) >= 0
             ? Number(progress.total)
             : 0,
         percent: clampGenerationPercent(progress?.percent, 5),
@@ -13443,7 +13481,7 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
     ) {
       try {
         global.mainWindow = BrowserWindow.fromWebContents(event.sender);
-      } catch {}
+      } catch { }
       try {
         updateRenameSchemaProgress({
           phase: "generatingSchema",
@@ -13487,7 +13525,7 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
         );
         if (detectedBase) payload.save_path = detectedBase;
       }
-    } catch {}
+    } catch { }
     fs.writeFileSync(newConfigPath, JSON.stringify(payload, null, 2));
 
     if (fs.existsSync(oldCachePath)) {
@@ -13517,7 +13555,7 @@ ipcMain.handle("renameAndSaveConfig", async (event, oldName, newConfig) => {
         );
         try {
           fs.renameSync(scopedOldPath, scopedNewPath);
-        } catch {}
+        } catch { }
       }
     }
 
@@ -13762,7 +13800,7 @@ function clearRegisteredShortcutEntry(entry) {
   if (entry.mode === "global" && entry.token) {
     try {
       globalShortcut.unregister(entry.token);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -14149,7 +14187,7 @@ function removeOverlayDirectKeydownListener(hook, listener) {
   if (!hook || typeof listener !== "function") return;
   try {
     hook.off("keydown", listener);
-  } catch {}
+  } catch { }
 }
 
 function tryRegisterDirectOverlayShortcut(
@@ -14161,10 +14199,10 @@ function tryRegisterDirectOverlayShortcut(
     source = id,
     onFire,
     getLastTriggeredAt = () => 0,
-    setLastTriggeredAt = () => {},
-    setListener = () => {},
-    setHook = () => {},
-    setBinding = () => {},
+    setLastTriggeredAt = () => { },
+    setListener = () => { },
+    setHook = () => { },
+    setBinding = () => { },
   } = {},
 ) {
   const deps = ensureOverlayDirectKeyboardHookStarted(source);
@@ -14459,7 +14497,7 @@ function clearOverlayShortcutRegistration() {
   ) {
     try {
       globalShortcut.unregister(registeredOverlayShortcut);
-    } catch {}
+    } catch { }
   }
   registeredOverlayShortcut = null;
   registeredOverlayShortcutMode = null;
@@ -14477,13 +14515,13 @@ function validateOverlayShortcutPreferencePair(preferences) {
 
   const normalizedOverlayShortcut = overlayShortcutValue
     ? normalizeOverlayShortcutAccelerator(overlayShortcutValue, {
-        allowSingle: false,
-      })
+      allowSingle: false,
+    })
     : null;
   const normalizedOverlayInteract = overlayInteractValue
     ? normalizeOverlayShortcutAccelerator(overlayInteractValue, {
-        allowSingle: true,
-      })
+      allowSingle: true,
+    })
     : null;
 
   if (overlayShortcutValue && !normalizedOverlayShortcut) {
@@ -14503,23 +14541,23 @@ function validateOverlayShortcutPreferencePair(preferences) {
 
   const overlayShortcutConflict = overlayShortcutValue
     ? findOverlayShortcutConflicts(overlayShortcutValue, {
-        allowSingle: false,
-        matchMode: "required",
-        otherShortcuts: overlayInteractValue
-          ? [
-              {
-                id: "overlay-interact",
-                source: "overlay-interact",
-                scope: "user",
-                shortcut: overlayInteractValue,
-                allowSingle: true,
-                matchMode: "required",
-                priority: OVERLAY_SHORTCUT_PRIORITY_INTERACT,
-                target: "overlayInteractShortcut",
-              },
-            ]
-          : [],
-      })
+      allowSingle: false,
+      matchMode: "required",
+      otherShortcuts: overlayInteractValue
+        ? [
+          {
+            id: "overlay-interact",
+            source: "overlay-interact",
+            scope: "user",
+            shortcut: overlayInteractValue,
+            allowSingle: true,
+            matchMode: "required",
+            priority: OVERLAY_SHORTCUT_PRIORITY_INTERACT,
+            target: "overlayInteractShortcut",
+          },
+        ]
+        : [],
+    })
     : null;
   if (overlayShortcutConflict?.conflicts?.length) {
     const firstConflict = overlayShortcutConflict.conflicts[0];
@@ -14539,23 +14577,23 @@ function validateOverlayShortcutPreferencePair(preferences) {
 
   const overlayInteractConflict = overlayInteractValue
     ? findOverlayShortcutConflicts(overlayInteractValue, {
-        allowSingle: true,
-        matchMode: "required",
-        otherShortcuts: overlayShortcutValue
-          ? [
-              {
-                id: "overlay-shortcut",
-                source: "overlay-shortcut",
-                scope: "user",
-                shortcut: overlayShortcutValue,
-                allowSingle: false,
-                matchMode: "required",
-                priority: OVERLAY_SHORTCUT_PRIORITY_TOGGLE,
-                target: "overlayShortcut",
-              },
-            ]
-          : [],
-      })
+      allowSingle: true,
+      matchMode: "required",
+      otherShortcuts: overlayShortcutValue
+        ? [
+          {
+            id: "overlay-shortcut",
+            source: "overlay-shortcut",
+            scope: "user",
+            shortcut: overlayShortcutValue,
+            allowSingle: false,
+            matchMode: "required",
+            priority: OVERLAY_SHORTCUT_PRIORITY_TOGGLE,
+            target: "overlayShortcut",
+          },
+        ]
+        : [],
+    })
     : null;
   if (overlayInteractConflict?.conflicts?.length) {
     const firstConflict = overlayInteractConflict.conflicts[0];
@@ -14736,7 +14774,7 @@ function initOverlayGlobalDragHook() {
     try {
       // Reposition only; do not activate/focus the window while dragging.
       overlayWindow.setPosition(nextX, nextY, false);
-    } catch {}
+    } catch { }
   };
 
   overlayDragMouseUpListener = (event) => {
@@ -14915,7 +14953,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
     });
     try {
       setOverlayInteractive(false);
-    } catch {}
+    } catch { }
     if (overlayPresented) {
       maybeShowOverlayAfterRendererReady("createOverlayWindow:ready-to-show");
     } else {
@@ -14966,7 +15004,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
           "ach-table:view-state",
           sharedAchievementTableViewState,
         );
-      } catch {}
+      } catch { }
     }
   });
 
@@ -14977,7 +15015,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
         false,
         "overlay-window:closed",
       );
-    } catch {}
+    } catch { }
     clearOverlayVisibilityAckTimeout();
     clearOverlayTopmostBoostTimer();
     stopOverlayGlobalDrag();
@@ -15000,7 +15038,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
         true,
         "overlay-window:show",
       );
-    } catch {}
+    } catch { }
     overlayShownAtLeastOnce = true;
     clearOverlayPendingShowState();
     overlayLogger.info("create-overlay:show", {
@@ -15041,7 +15079,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
         false,
         "overlay-window:hide",
       );
-    } catch {}
+    } catch { }
     clearOverlayPendingShowState();
     clearOverlayVisibilityAckTimeout();
     overlayLogger.info("create-overlay:hide", {
@@ -15098,7 +15136,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
         if (overlayWindow && !overlayWindow.isDestroyed()) {
           overlayWindow.destroy();
         }
-      } catch {}
+      } catch { }
     },
   );
 
@@ -15112,7 +15150,7 @@ function createOverlayWindow(selectedConfig, initialPresented = true) {
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.destroy();
       }
-    } catch {}
+    } catch { }
   });
 
   scheduleOverlayDragHookAfterBootComplete();
@@ -15237,9 +15275,9 @@ function isEpicOfficialConfigBlacklisted(configName, config = null) {
   if (!resolvedConfig || typeof resolvedConfig !== "object") return false;
   const appid = String(
     resolvedConfig?.appid ||
-      resolvedConfig?.epic_product_id ||
-      resolvedConfig?.epicProductId ||
-      "",
+    resolvedConfig?.epic_product_id ||
+    resolvedConfig?.epicProductId ||
+    "",
   ).trim();
   if (!appid) return false;
   return isAppIdBlacklisted(appid, "epic-official");
@@ -15583,10 +15621,10 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
       });
       scheduleEpicOfficialActivePoll(
         EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS[
-          Math.min(
-            state.errorCount || 0,
-            EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS.length - 1,
-          )
+        Math.min(
+          state.errorCount || 0,
+          EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS.length - 1,
+        )
         ],
         "config-read-failed",
       );
@@ -15608,9 +15646,9 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
         appid:
           String(
             config?.appid ||
-              config?.epic_product_id ||
-              config?.epicProductId ||
-              "",
+            config?.epic_product_id ||
+            config?.epicProductId ||
+            "",
           ).trim() || null,
       });
       return;
@@ -15622,7 +15660,7 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
       try {
         const parsed = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
         if (Array.isArray(parsed)) schemaAchievements = parsed;
-      } catch {}
+      } catch { }
     }
     let productId = String(
       config?.epic_product_id || config?.epicProductId || config?.appid || "",
@@ -15637,7 +15675,7 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
           const sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
           if (sidecar?.appid) productId = String(sidecar.appid).trim();
         }
-      } catch {}
+      } catch { }
     }
     const token = await ensureEpicAccessToken(
       getEpicAuthRequestOptions({
@@ -15705,7 +15743,7 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
       config.epic_product_id = nextProductId;
       try {
         fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
-      } catch {}
+      } catch { }
     }
 
     state.accountId = nextAccountId;
@@ -15754,10 +15792,10 @@ async function runEpicOfficialActivePoll(trigger = "manual") {
       currentState.errorCount = (currentState.errorCount || 0) + 1;
       const delayMs =
         EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS[
-          Math.min(
-            currentState.errorCount - 1,
-            EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS.length - 1,
-          )
+        Math.min(
+          currentState.errorCount - 1,
+          EPIC_OFFICIAL_ACTIVE_POLL_ERROR_DELAYS_MS.length - 1,
+        )
         ];
       epicOfficialLogger.warn("epic-official:poll:error", {
         trigger,
@@ -15870,7 +15908,7 @@ ipcMain.on("ach-table:view-state", (_event, payload) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     try {
       overlayWindow.webContents.send("ach-table:view-state", normalized);
-    } catch {}
+    } catch { }
   }
 });
 
@@ -15879,10 +15917,10 @@ ipcMain.on(
   (event, { language, configName, uiLanguage }) => {
     const effectiveUiLang = normalizeUiLanguage(
       uiLanguage ||
-        (cachedPreferences && cachedPreferences.uiLanguage) ||
-        language ||
-        selectedLanguage ||
-        "english",
+      (cachedPreferences && cachedPreferences.uiLanguage) ||
+      language ||
+      selectedLanguage ||
+      "english",
     );
 
     if (language) {
@@ -15957,7 +15995,7 @@ ipcMain.on("window:set-position", (event, pos) => {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   try {
     win.setPosition(Math.round(x), Math.round(y), false);
-  } catch {}
+  } catch { }
 });
 ipcMain.on("overlay:request-focus", () => {
   return;
@@ -16012,7 +16050,7 @@ ipcMain.on("tray:action", (_event, action) => {
             message,
             color: ok ? "#4CAF50" : "#f44336",
           });
-        } catch {}
+        } catch { }
         if (!ok) {
           emitBootOnboardingShowToMain("tray-resume-failed", {
             error: result?.error || null,
@@ -16111,7 +16149,7 @@ app.whenReady().then(async () => {
     global.disablePlaytime = prefs.disablePlaytime === true;
     try {
       processPoller.setEnabled(isProcessNameWatcherEnabled(prefs));
-    } catch {}
+    } catch { }
     selectedSound = prefs.sound || "mute";
     selectedPreset = prefs.preset || "default";
     selectedPosition = prefs.position || "center-bottom";
@@ -16181,7 +16219,7 @@ function showProgressNotification(data) {
         progressDurationMs = parsedDuration;
       }
     }
-  } catch {}
+  } catch { }
   const x = 20;
   const y = Math.max(0, height - progressHeight + 10);
   const progressWindow = new BrowserWindow({
@@ -16278,7 +16316,7 @@ function isDuplicatePlay(data) {
     if (__lastPlaySig === sig && now - __lastPlayAt < 1000) return true;
     __lastPlaySig = sig;
     __lastPlayAt = now;
-  } catch {}
+  } catch { }
   return false;
 }
 
@@ -16345,7 +16383,7 @@ function createPlaytimeWindow(playData = {}) {
       }
       try {
         playtimeWindow.webContents.send("start-close-animation", normalized);
-      } catch {}
+      } catch { }
       setTimeout(
         () => {
           try {
@@ -16545,9 +16583,9 @@ ipcMain.on("overlay:visibility-ack", (event, payload = {}) => {
   const senderId = event.sender?.id || null;
   const currentWebContentsId =
     overlayWindow &&
-    !overlayWindow.isDestroyed() &&
-    overlayWindow.webContents &&
-    !overlayWindow.webContents.isDestroyed()
+      !overlayWindow.isDestroyed() &&
+      overlayWindow.webContents &&
+      !overlayWindow.webContents.isDestroyed()
       ? overlayWindow.webContents.id
       : null;
   const ackMeta = {
@@ -16686,7 +16724,7 @@ async function upsertAutoSelectIndexEntryFromPath(filePath) {
             JSON.stringify(nextData, null, 2),
             "utf8",
           );
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -16726,7 +16764,7 @@ function queueAutoSelectIndexUpsertFromConfigPath(filePath) {
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
     autoSelectIndexTimers.delete(safeName);
-    upsertAutoSelectIndexEntryFromPath(filePath).catch(() => {});
+    upsertAutoSelectIndexEntryFromPath(filePath).catch(() => { });
   }, AUTO_SELECT_INDEX_UPSERT_DEBOUNCE_MS);
   autoSelectIndexTimers.set(safeName, t);
 }
@@ -16834,7 +16872,7 @@ function stopAutoSelectProcessPoller() {
   if (typeof autoSelectProcessPollerUnsubscribe === "function") {
     try {
       autoSelectProcessPollerUnsubscribe();
-    } catch {}
+    } catch { }
     autoSelectProcessPollerUnsubscribe = null;
   }
   autoSelectProcessPollerStarted = false;
@@ -16850,9 +16888,9 @@ function startAutoSelectProcessPoller() {
   }
   try {
     processPoller.setEnabled(true);
-  } catch {}
+  } catch { }
   autoSelectProcessPollerStarted = true;
-  ensureAutoSelectIndexReady().catch(() => {});
+  ensureAutoSelectIndexReady().catch(() => { });
   autoSelectProcessPollerUnsubscribe = processPoller.subscribe((list) => {
     autoSelectRunningGameConfig(list);
   });
@@ -16863,7 +16901,7 @@ function startAutoSelectProcessPoller() {
     broadcastToAll("epic-official:background-ready", {
       reason: "process-poller-started",
     });
-  } catch {}
+  } catch { }
 }
 
 function scheduleAutoSelectProcessPollerAfterBoot() {
@@ -16871,7 +16909,7 @@ function scheduleAutoSelectProcessPollerAfterBoot() {
     stopAutoSelectProcessPoller();
     try {
       processPoller.setEnabled(false);
-    } catch {}
+    } catch { }
     appLogger.info("process-poller:auto-select-disabled", {
       reason: "process-watcher-disabled",
     });
@@ -17307,7 +17345,7 @@ async function seedManualConfigsAtBoot() {
           running++;
           Promise.resolve()
             .then(() => worker(item))
-            .catch(() => {})
+            .catch(() => { })
             .finally(() => {
               running--;
               if (running === 0 && idx >= items.length) {
@@ -17350,10 +17388,10 @@ async function seedManualConfigsAtBoot() {
         const progressFiles =
           shadPs4Root && npcommid
             ? collectPs4ProgressFilesForConfig(
-                shadPs4Root,
-                npcommid,
-                String(config?.shadps4_user_id || "").trim(),
-              )
+              shadPs4Root,
+              npcommid,
+              String(config?.shadps4_user_id || "").trim(),
+            )
             : [];
         if (
           progressPath &&
@@ -17480,9 +17518,9 @@ async function seedManualConfigsAtBoot() {
           fs.copyFileSync(altPath, cachePath);
           if (seedKey) bootSeededCacheKeys.add(seedKey);
           return;
-        } catch {}
+        } catch { }
       }
-    } catch {}
+    } catch { }
 
     const candidatePath = resolveBootSeedCandidatePath(config);
     if (!candidatePath) return;
@@ -17512,7 +17550,7 @@ async function seedManualConfigsAtBoot() {
     let schemaPath = null;
     try {
       schemaPath = resolveConfigSchemaPath(config, config?.config_path || null);
-    } catch {}
+    } catch { }
     const snapshot = loadAchievementsFromSaveFile(
       path.dirname(candidatePath),
       {},
@@ -17583,7 +17621,7 @@ function scheduleManualCacheSeedAfterBoot() {
         }
         try {
           await flagPlatinumFromCacheOnBoot();
-        } catch {}
+        } catch { }
       } finally {
         bootPostSeedLimiterActive = false;
         markBootManualSeedComplete();
@@ -17953,32 +17991,32 @@ function getPlatformForAppId(appid) {
     if (!set || set.size === 0) return "steam";
     const order = /^\d+$/.test(key)
       ? [
-          "steam",
-          "steam-official",
-          "ea-official",
-          "ubisoft-official",
-          "uplay",
-          "gog",
-          "epic",
-          "epic-official",
-          "xenia",
-          "rpcs3",
-          "shadps4",
-        ]
+        "steam",
+        "steam-official",
+        "ea-official",
+        "ubisoft-official",
+        "uplay",
+        "gog",
+        "epic",
+        "epic-official",
+        "xenia",
+        "rpcs3",
+        "shadps4",
+      ]
       : [
-          "epic-official",
-          "epic",
-          "gog-official",
-          "steam",
-          "steam-official",
-          "ea-official",
-          "ubisoft-official",
-          "uplay",
-          "gog",
-          "xenia",
-          "rpcs3",
-          "shadps4",
-        ];
+        "epic-official",
+        "epic",
+        "gog-official",
+        "steam",
+        "steam-official",
+        "ea-official",
+        "ubisoft-official",
+        "uplay",
+        "gog",
+        "xenia",
+        "rpcs3",
+        "shadps4",
+      ];
     for (const p of order) {
       if (set.has(p)) return p;
     }
@@ -18059,7 +18097,7 @@ function migrateImagesToPlatformStorage() {
             if (!remaining.length) {
               fs.rmdirSync(srcDir);
             }
-          } catch {}
+          } catch { }
         } catch (err) {
           ipcLogger?.warn?.("images:repair-platform-nesting-failed", {
             platform: entry.name,
@@ -18134,7 +18172,7 @@ function migrateImagesToPlatformStorage() {
       }
       try {
         fs.rmSync(srcDir, { recursive: true, force: true });
-      } catch {}
+      } catch { }
     } catch (err) {
       ipcLogger?.warn?.("images:migrate-dir-failed", {
         appid,
@@ -18159,7 +18197,7 @@ ipcMain.handle("get-display-workarea", () => {
       const display = screen.getDisplayMatching(bounds);
       return display.workAreaSize || display.size;
     }
-  } catch {}
+  } catch { }
   const primary = screen.getPrimaryDisplay();
   return primary?.workAreaSize || primary?.size || { width: 0, height: 0 };
 });
@@ -18200,12 +18238,12 @@ ipcMain.handle("generate-auto-configs", async (event, folderPath) => {
           detail: progress?.detail || "",
           current:
             Number.isFinite(Number(progress?.current)) &&
-            Number(progress.current) >= 0
+              Number(progress.current) >= 0
               ? Number(progress.current)
               : 0,
           total:
             Number.isFinite(Number(progress?.total)) &&
-            Number(progress.total) >= 0
+              Number(progress.total) >= 0
               ? Number(progress.total)
               : 0,
           percent: clampGenerationPercent(progress?.percent, 0),
@@ -18274,10 +18312,21 @@ function buildStartupCommandLine() {
 }
 
 ipcMain.handle("startup:get-start-with-windows", async () => {
+  console.log(process.execPath)
   return await hasStartupTask();
 });
 
 ipcMain.handle("startup:set-start-with-windows", async (_e, enabled) => {
+  if (enabled) {
+    const commandLine = buildStartupCommandLine();
+    await createStartupTask(commandLine);
+  } else {
+    await deleteStartupTask();
+  }
+  return true;
+});
+
+ipcMain.handle("startup:set-start-with-linux", async (_e, enabled) => {
   if (enabled) {
     const commandLine = buildStartupCommandLine();
     await createStartupTask(commandLine);
@@ -18829,7 +18878,7 @@ ipcMain.handle("covers:ui-log", async (_event, payload = {}) => {
       message || "covers:ui-log",
       Object.keys(meta).length ? meta : undefined,
     );
-  } catch {}
+  } catch { }
   return true;
 });
 
@@ -18847,7 +18896,7 @@ ipcMain.handle("ui:log", async (_event, payload = {}) => {
       message || "ui:log",
       Object.keys(meta).length ? meta : undefined,
     );
-  } catch {}
+  } catch { }
   return true;
 });
 
@@ -18865,11 +18914,12 @@ ipcMain.handle("overlay:log", async (_event, payload = {}) => {
       message || "overlay:log",
       Object.keys(meta).length ? meta : undefined,
     );
-  } catch {}
+  } catch { }
   return true;
 });
 
 const makeWatchedFolders = require("./utils/watched-folders");
+const { settings } = require("cluster");
 
 watchedFoldersApi = makeWatchedFolders({
   app,
@@ -18895,7 +18945,7 @@ watchedFoldersApi = makeWatchedFolders({
             const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
             plat = normalizePlatform(cfg?.platform) || plat;
           }
-        } catch {}
+        } catch { }
       }
       seedCacheFromSnapshot(configName, snapshot, plat, {
         appid,
@@ -18958,9 +19008,16 @@ let screenshot = null;
 try {
   screenshot = require("screenshot-desktop");
 } catch (e) {
-  console.warn(
-    '⚠️ "screenshot-desktop" missing. Run: npm i screenshot-desktop',
-  );
+  if (process.platform === "linux") {
+    console.warn(
+      '⚠️ "ImageMagick" missing. Run: apt-get install imagemagick',
+    );
+  }
+  else {
+    console.warn(
+      '⚠️ "screenshot-desktop" missing. Run: npm i screenshot-desktop',
+    );
+  }
 }
 
 function readPrefsSafe() {
@@ -19020,7 +19077,7 @@ async function flagPlatinumFromCacheOnBoot() {
             running++;
             Promise.resolve()
               .then(() => worker(item))
-              .catch(() => {})
+              .catch(() => { })
               .finally(() => {
                 running--;
                 if (running === 0 && idx >= items.length) {
@@ -19050,11 +19107,11 @@ async function flagPlatinumFromCacheOnBoot() {
       const seedCandidatePath = resolveBootSeedCandidatePath(config);
       const unchangedByMeta = seedCandidatePath
         ? isAchCacheMetaMatch(
-            name,
-            platform,
-            seedCandidatePath,
-            String(config?.appid || ""),
-          )
+          name,
+          platform,
+          seedCandidatePath,
+          String(config?.appid || ""),
+        )
         : false;
       if (unchangedByMeta && config?.platinum === true) return;
       const schemaPath = resolveConfigSchemaPath(config);
@@ -19068,8 +19125,8 @@ async function flagPlatinumFromCacheOnBoot() {
       }
       const schemaNames = Array.isArray(schema)
         ? schema
-            .map((a) => (a && a.name ? String(a.name) : null))
-            .filter(Boolean)
+          .map((a) => (a && a.name ? String(a.name) : null))
+          .filter(Boolean)
         : [];
       if (!schemaNames.length) return;
 
@@ -19097,7 +19154,7 @@ async function flagPlatinumFromCacheOnBoot() {
       await runWithConcurrency(batch, CONCURRENCY, processFile);
       await sleep(0);
     }
-  } catch {}
+  } catch { }
 }
 
 app.on("before-quit", () => {
@@ -19105,7 +19162,7 @@ app.on("before-quit", () => {
   stopAutoSelectProcessPoller();
   try {
     processPoller.setEnabled(false);
-  } catch {}
+  } catch { }
   if (overlayDragHookBootWaitTimer) {
     clearTimeout(overlayDragHookBootWaitTimer);
     overlayDragHookBootWaitTimer = null;
@@ -19159,7 +19216,7 @@ app.on("render-process-gone", (_event, webContents, details) => {
       ) {
         return mainWindow.webContents.id === webContents?.id;
       }
-    } catch {}
+    } catch { }
     const u = String(crashedUrl || "").toLowerCase();
     return u.includes("index.html");
   })();
