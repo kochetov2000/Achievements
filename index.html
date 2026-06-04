@@ -4038,14 +4038,21 @@
           aria-label="Auto-config folder selection"
         ></div>
         <p id="bootOnboardingHint" class="boot-onboarding-hint"></p>
-        <div id="windowsLinuxPrefix">
+        <div id="windowsLinuxPrefix" class="input-with-button settings-control">
+          <label for="windowsLinuxPrefixInputLabel"
+            >Wine prefix:</label
+          >
           <input
-            id="windowsLinuxPrefixInput"
             type="text"
-            placeholder="Type your prefix path here"
-            autocomplete="off"
-            spellcheck="false"
+            id="windowsLinuxPrefixInput"
           />
+          <button
+            type="button"
+            id="windowsLinuxPrefixInputFolder"
+            aria-label="Choose folder"
+          >
+            📂
+          </button>
         </div>
         <div id="bootOnboardingActions" class="confirm-actions">
           <button id="bootOnboardingSetPrefixBtn" type="button">
@@ -17221,6 +17228,7 @@
           document.getElementById("windowsLinuxPrefix");
         const windowsLinuxPrefixInput = 
           document.getElementById("windowsLinuxPrefixInput");
+        const windowsLinuxPrefixInputFolder = document.getElementById("windowsLinuxPrefixInputFolder");
         const bootOnboardingHint =
           document.getElementById("bootOnboardingHint");
         const bootOnboardingActions = document.getElementById(
@@ -17260,10 +17268,16 @@
             windowsLinuxPrefix.remove();
           }
           else if (startDiscovery) {
-            bootOnboardingSetPrefixBtn.onclick = () => {
-              window.folders.setLinuxWindowsPrefix((windowsLinuxPrefixInput.value ?? "").trim());
+            bootOnboardingSetPrefixBtn.addEventListener("click", async () => {
+              await window.folders.setLinuxWindowsPrefix((windowsLinuxPrefixInput.value ?? "").trim());
               startDiscovery();
-            };
+            });
+            windowsLinuxPrefixInputFolder.addEventListener("click", async () => {
+                const dir = await window.api.selectFolder();
+                if (dir) {
+                  windowsLinuxPrefixInput.value = dir;
+                }
+              });
           }
           if (!bootOnboardingModal) return;
           if (visible) {

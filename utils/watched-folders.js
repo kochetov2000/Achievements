@@ -10205,8 +10205,6 @@ module.exports = function makeWatchedFolders({
     if (prefix) {
       setLinuxWindowsPrefix(prefix);
     }
-    console.log(prefix);
-    console.log(watchRoots);
   }
 
   // ——— IPC ———
@@ -10230,6 +10228,7 @@ module.exports = function makeWatchedFolders({
         ok: true,
       };
     });
+
   }
 
   ipcMain.handle("folders:list", async () => {
