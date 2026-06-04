@@ -1120,6 +1120,7 @@ const DEFAULT_PREFERENCES = {
   steamApiKey: "",
   steamOfficialSteamId: "",
   epicOfficialAccountId: "",
+  prefix: ""
 };
 
 const UI_LOCALE_DIR = path.join(__dirname, "assets", "locales");
@@ -18318,10 +18319,21 @@ ipcMain.handle("startup:get-start-with-windows", async () => {
 
 ipcMain.handle("startup:set-start-with-windows", async (_e, enabled) => {
   if (enabled) {
-    const commandLine = buildStartupCommandLine();
-    await createStartupTask(commandLine);
+    if (process.platform === "win32") {
+      const commandLine = buildStartupCommandLine();
+      await createStartupTask(commandLine);
+    }
+    else {
+
+    }
+
   } else {
-    await deleteStartupTask();
+    if (process.platform === "win32") {
+      await deleteStartupTask();
+    }
+    else {
+
+    }
   }
   return true;
 });
