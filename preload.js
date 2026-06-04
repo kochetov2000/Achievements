@@ -17,6 +17,7 @@ function subscribeIpc(channel, callback, mapArgs = (_event, data) => [data]) {
 contextBridge.exposeInMainWorld("api", {
   // Config management
   saveConfig: (config) => ipcRenderer.invoke("saveConfig", config),
+  isWindows: () => ipcRenderer.invoke("platform:isWindows"),
   regenerateSchema: (payload) =>
     ipcRenderer.invoke("schema:regenerate", payload),
   getActiveGenerationProgress: () =>
@@ -315,7 +316,9 @@ contextBridge.exposeInMainWorld("electron", {
     },
     invoke: (channel, ...args) => {
       const valid = [
+        "platform:is-windows",
         "folders:list",
+        "folders:set-linux-windows-prefix",
         "folders:add",
         "folders:remove",
         "folders:rescan",
@@ -424,6 +427,7 @@ contextBridge.exposeInMainWorld("achgen", {
 // Folders
 contextBridge.exposeInMainWorld("folders", {
   list: () => ipcRenderer.invoke("folders:list"),
+  setLinuxWindowsPrefix: (prefix) => ipcRenderer.invoke("folders:set-linux-windows-prefix", prefix),
   add: (dirPath) => ipcRenderer.invoke("folders:add", dirPath),
   remove: (dirPath) => ipcRenderer.invoke("folders:remove", dirPath),
   rescan: () => ipcRenderer.invoke("folders:rescan"),

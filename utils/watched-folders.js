@@ -10210,6 +10210,27 @@ module.exports = function makeWatchedFolders({
   }
 
   // ——— IPC ———
+  ipcMain.handle("platform:is-windows", async () => {
+    return {
+      ok: true,
+      is_windows: IS_WINDOWS,
+    };
+  });
+
+  if (!IS_WINDOWS) {
+    ipcMain.handle("folders:set-linux-windows-prefix", async (_e, prefix) => {
+      if (typeof prefix !== "string") {
+        return {
+          ok: false,
+        };
+      }
+      setLinuxWindowsPrefix(prefix);
+      return {
+        ok: true,
+      };
+    });
+  }
+
   ipcMain.handle("folders:list", async () => {
     return {
       ok: true,

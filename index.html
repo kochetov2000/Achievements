@@ -4039,6 +4039,9 @@
         ></div>
         <p id="bootOnboardingHint" class="boot-onboarding-hint"></p>
         <div id="bootOnboardingActions" class="confirm-actions">
+          <button id="bootOnboardingRediscoverBtn" type="button">
+            Restart discovery
+          </button>
           <button id="bootOnboardingSkipBtn" type="button">
             Skip and mute all
           </button>
@@ -17206,6 +17209,7 @@
         const bootOnboardingActions = document.getElementById(
           "bootOnboardingActions",
         );
+        const bootOnboardingRediscoverBtn = document.getElementById("bootOnboardingRediscoverBtn");
         const bootOnboardingStartBtn = document.getElementById(
           "bootOnboardingStartBtn",
         );
@@ -17233,7 +17237,8 @@
             ? new Promise((resolve) => setTimeout(resolve, ms))
             : Promise.resolve();
 
-        const setBootOnboardingModalVisible = (visible) => {
+        const setBootOnboardingModalVisible = (visible, startOnboardingDiscovery) => {
+          bootOnboardingRediscoverBtn.onclick = startOnboardingDiscovery;
           if (!bootOnboardingModal) return;
           if (visible) {
             bootOnboardingLastFocus = document.activeElement;
@@ -17484,67 +17489,75 @@
           if (bootOnboardingHint) {
             bootOnboardingHint.textContent = "";
           }
-          setBootOnboardingModalVisible(true);
-          setBootOnboardingBusy(true);
-          renderBootOnboardingSearchingState();
-          const discoveryStartedAt = Date.now();
-          let discovery = null;
-          try {
-            discovery = await window.api.discoverBootOnboardingFolders?.();
-          } catch (err) {
-            discovery = { ok: false, candidates: [], error: err?.message };
-          }
-          const discoveryElapsedMs = Date.now() - discoveryStartedAt;
-          if (discoveryElapsedMs < BOOT_ONBOARDING_SEARCH_STAGE_MIN_MS) {
-            await waitOnboardingDelay(
-              BOOT_ONBOARDING_SEARCH_STAGE_MIN_MS - discoveryElapsedMs,
-            );
-          }
-          if (bootOnboardingPromptDone) {
-            bootOnboardingPromptActive = false;
-            return;
-          }
-          bootOnboardingCandidates = Array.isArray(discovery?.candidates)
-            ? discovery.candidates
-            : [];
-          renderBootOnboardingCandidates(bootOnboardingCandidates);
-          if (bootOnboardingHint) {
-            if (!discovery?.ok) {
-              bootOnboardingHint.textContent = tUi(
-                "boot.onboarding.searchFailed",
-                "Folder search failed. You can skip and continue.",
-              );
-            } else if (!bootOnboardingCandidates.length) {
-              bootOnboardingHint.textContent = tUi(
-                "boot.onboarding.noCandidates",
-                "No candidate folders found. Use Skip and mute all to continue.",
-              );
-              await waitOnboardingDelay(BOOT_ONBOARDING_EMPTY_STAGE_DELAY_MS);
-            } else {
-              const count = bootOnboardingCandidates.length;
-              bootOnboardingHint.textContent = tUiFmt(
-                "boot.onboarding.foundCount",
-                { count: String(count) },
-                `Found ${count} folder(s).`,
-              );
-              await waitOnboardingDelay(BOOT_ONBOARDING_POST_RESULT_DELAY_MS);
+          
+          async function startOnboardingDiscovery() {
+            setBootOnboardingBusy(true);
+            renderBootOnboardingSearchingState();
+            const discoveryStartedAt = Date.now();
+            let discovery = null;
+            try {
+              discovery = await window.api.discoverBootOnboardingFolders?.();
+            } catch (err) {
+              discovery = { ok: false, candidates: [], error: err?.message };
             }
-          }
-          setBootOnboardingBusy(false);
-          if (bootOnboardingStartBtn) {
-            bootOnboardingStartBtn.disabled =
-              bootOnboardingBusy || bootOnboardingCandidates.length === 0;
-          }
-          if (bootOnboardingSkipBtn) {
-            bootOnboardingSkipBtn.disabled = bootOnboardingBusy;
-          }
-          setTimeout(() => {
-            if (bootOnboardingCandidates.length === 0) {
-              bootOnboardingSkipBtn?.focus();
-            } else {
-              bootOnboardingStartBtn?.focus();
+            const discoveryElapsedMs = Date.now() - discoveryStartedAt;
+            if (discoveryElapsedMs < BOOT_ONBOARDING_SEARCH_STAGE_MIN_MS) {
+              await waitOnboardingDelay(
+                BOOT_ONBOARDING_SEARCH_STAGE_MIN_MS - discoveryElapsedMs,
+              );
             }
-          }, 0);
+            if (bootOnboardingPromptDone) {
+              bootOnboardingPromptActive = false;
+              return;
+            }
+            bootOnboardingCandidates = Array.isArray(discovery?.candidates)
+              ? discovery.candidates
+              : [];
+            renderBootOnboardingCandidates(bootOnboardingCandidates);
+            if (bootOnboardingHint) {
+              if (!discovery?.ok) {
+                bootOnboardingHint.textContent = tUi(
+                  "boot.onboarding.searchFailed",
+                  "Folder search failed. You can skip and continue.",
+                );
+              } else if (!bootOnboardingCandidates.length) {
+                bootOnboardingHint.textContent = tUi(
+                  "boot.onboarding.noCandidates",
+                  "No candidate folders found. Use Skip and mute all to continue.",
+                );
+                await waitOnboardingDelay(BOOT_ONBOARDING_EMPTY_STAGE_DELAY_MS);
+              } else {
+                const count = bootOnboardingCandidates.length;
+                bootOnboardingHint.textContent = tUiFmt(
+                  "boot.onboarding.foundCount",
+                  { count: String(count) },
+                  `Found ${count} folder(s).`,
+                );
+                await waitOnboardingDelay(BOOT_ONBOARDING_POST_RESULT_DELAY_MS);
+              }
+            }
+            setBootOnboardingBusy(false);
+            if (bootOnboardingStartBtn) {
+              bootOnboardingStartBtn.disabled =
+                bootOnboardingBusy || bootOnboardingCandidates.length === 0;
+            }
+            if (bootOnboardingSkipBtn) {
+              bootOnboardingSkipBtn.disabled = bootOnboardingBusy;
+            }
+            setTimeout(() => {
+              if (bootOnboardingCandidates.length === 0) {
+                bootOnboardingSkipBtn?.focus();
+              } else {
+                bootOnboardingStartBtn?.focus();
+              }
+            }, 0);
+          }
+
+          setBootOnboardingModalVisible(true, () => {
+            window.folders.setLinuxWindowsPrefix("/home/kochetov/.lutris");
+            startOnboardingDiscovery();
+          });
+          await startOnboardingDiscovery();
         };
 
         const maybeStartBootOnboarding = () => {
