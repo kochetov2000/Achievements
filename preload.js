@@ -17,7 +17,7 @@ function subscribeIpc(channel, callback, mapArgs = (_event, data) => [data]) {
 contextBridge.exposeInMainWorld("api", {
   // Config management
   saveConfig: (config) => ipcRenderer.invoke("saveConfig", config),
-  isWindows: () => ipcRenderer.invoke("platform:isWindows"),
+  isWindows: () => ipcRenderer.invoke("platform:is-windows"),
   regenerateSchema: (payload) =>
     ipcRenderer.invoke("schema:regenerate", payload),
   getActiveGenerationProgress: () =>

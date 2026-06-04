@@ -10225,6 +10225,7 @@ module.exports = function makeWatchedFolders({
         };
       }
       setLinuxWindowsPrefix(prefix);
+      persistPreferencesPatch({prefix});
       return {
         ok: true,
       };

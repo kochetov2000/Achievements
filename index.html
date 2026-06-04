@@ -4038,9 +4038,18 @@
           aria-label="Auto-config folder selection"
         ></div>
         <p id="bootOnboardingHint" class="boot-onboarding-hint"></p>
+        <div id="windowsLinuxPrefix">
+          <input
+            id="windowsLinuxPrefixInput"
+            type="text"
+            placeholder="Type your prefix path here"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
         <div id="bootOnboardingActions" class="confirm-actions">
-          <button id="bootOnboardingRediscoverBtn" type="button">
-            Restart discovery
+          <button id="bootOnboardingSetPrefixBtn" type="button">
+            Set prefix
           </button>
           <button id="bootOnboardingSkipBtn" type="button">
             Skip and mute all
@@ -6675,6 +6684,10 @@
       }
 
       window.addEventListener("DOMContentLoaded", () => {
+        window.api.isWindows().then((result) => {
+          window.isWindows = result.ok ? !!result.is_windows : true;
+        });
+
         window.api
           ?.getActiveGenerationProgress?.()
           ?.then((payload) => {
@@ -17204,12 +17217,16 @@
         );
         const bootOnboardingList =
           document.getElementById("bootOnboardingList");
+        const windowsLinuxPrefix = 
+          document.getElementById("windowsLinuxPrefix");
+        const windowsLinuxPrefixInput = 
+          document.getElementById("windowsLinuxPrefixInput");
         const bootOnboardingHint =
           document.getElementById("bootOnboardingHint");
         const bootOnboardingActions = document.getElementById(
           "bootOnboardingActions",
         );
-        const bootOnboardingRediscoverBtn = document.getElementById("bootOnboardingRediscoverBtn");
+        const bootOnboardingSetPrefixBtn = document.getElementById("bootOnboardingSetPrefixBtn");
         const bootOnboardingStartBtn = document.getElementById(
           "bootOnboardingStartBtn",
         );
@@ -17237,8 +17254,17 @@
             ? new Promise((resolve) => setTimeout(resolve, ms))
             : Promise.resolve();
 
-        const setBootOnboardingModalVisible = (visible, startOnboardingDiscovery) => {
-          bootOnboardingRediscoverBtn.onclick = startOnboardingDiscovery;
+        const setBootOnboardingModalVisible = (visible, startDiscovery) => {
+          if (window.isWindows) {
+            bootOnboardingSetPrefixBtn.remove();
+            windowsLinuxPrefix.remove();
+          }
+          else if (startDiscovery) {
+            bootOnboardingSetPrefixBtn.onclick = () => {
+              window.folders.setLinuxWindowsPrefix((windowsLinuxPrefixInput.value ?? "").trim());
+              startDiscovery();
+            };
+          }
           if (!bootOnboardingModal) return;
           if (visible) {
             bootOnboardingLastFocus = document.activeElement;
@@ -17553,10 +17579,7 @@
             }, 0);
           }
 
-          setBootOnboardingModalVisible(true, () => {
-            window.folders.setLinuxWindowsPrefix("/home/kochetov/.lutris");
-            startOnboardingDiscovery();
-          });
+          setBootOnboardingModalVisible(true, startOnboardingDiscovery);
           await startOnboardingDiscovery();
         };
 
