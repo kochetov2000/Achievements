@@ -8,7 +8,8 @@
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dl-browsers": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 node ./node_modules/playwright-core/cli.js install chromium chromium-headless-shell",
-    "dist": "npm run dl-browsers && electron-builder -wl --x64"
+    "dist-linux": "npm run dl-browsers && electron-builder -l --x64",
+    "dist-windows": "npm run dl-browsers && electron-builder -w --x64"
   },
   "dependencies": {
     "axios": "^1.12.0",
