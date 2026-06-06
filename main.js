@@ -9566,7 +9566,7 @@ function createTray() {
   else {
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: 'Show',
+        label: tUi('trayMenuShow', "Show"),
         click: () => {
           showMainWindowRespectingPrefs();
         },
@@ -9575,7 +9575,7 @@ function createTray() {
         click: () => {
           openSettingsFromTray();
         },
-        label: 'Settings',
+        label: tUi('trayMenuSettings', "Settings"),
       },
       { type: 'separator' },
       {
@@ -9583,7 +9583,7 @@ function createTray() {
           exitFromTray = true;
           app.quit();
         },
-        label: 'Quit',
+        label: tUi('trayMenuQuit', "Quit"),
       },
     ]);
 
@@ -18312,31 +18312,21 @@ function buildStartupCommandLine() {
   return [exe].concat(argList).join(" ").trim();
 }
 
+
 ipcMain.handle("startup:get-start-with-windows", async () => {
-  console.log(process.execPath)
   return await hasStartupTask();
 });
 
 ipcMain.handle("startup:set-start-with-windows", async (_e, enabled) => {
   if (enabled) {
-    if (process.platform === "win32") {
-      const commandLine = buildStartupCommandLine();
-      await createStartupTask(commandLine);
-    }
-    else {
-
-    }
-
+    const commandLine = buildStartupCommandLine();
+    await createStartupTask(commandLine);
   } else {
-    if (process.platform === "win32") {
-      await deleteStartupTask();
-    }
-    else {
-
-    }
+    await deleteStartupTask();
   }
   return true;
 });
+
 
 ipcMain.handle("startup:set-start-with-linux", async (_e, enabled) => {
   if (enabled) {
