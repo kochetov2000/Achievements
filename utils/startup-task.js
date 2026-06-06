@@ -3,7 +3,7 @@ const fs = require("fs");
 
 const TASK_NAME = "AchievementsAutoStart";
 
-const pathAutostartFile = `/home/${process.env.HOME}/.config/autostart/Achievements.desktop`;
+const pathAutostartFile = `${process.env.HOME}/.config/autostart/Achievements.desktop`;
 
 function runSchtasks(args) {
   return new Promise((resolve, reject) => {

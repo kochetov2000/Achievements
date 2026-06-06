@@ -11606,6 +11606,19 @@
       let __bodyOverflowPrev = "";
 
       function openSettingsModal() {
+        const startWindowsCheckbox = document.querySelector('label[for=settings-startWindowsCheckbox]')
+        if (window.isWindows) {
+          startWindowsCheckbox.textContent = tUi(
+            "label.settings-startWindowsCheckbox", 
+            "Start with Windows (Run as admin to enable)"
+          )
+        }
+        else {
+          startWindowsCheckbox.textContent = tUi(
+            "label.settings-startLinuxCheckbox",
+            "Start with Linux"
+          )
+        }
         const settingsMenu = document.getElementById("settingsMenu");
         const content = document.querySelector(".settings-content");
 

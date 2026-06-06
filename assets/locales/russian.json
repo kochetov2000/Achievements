@@ -135,6 +135,7 @@
   "label.settings-startInTrayCheckbox": "Запускать свернутым в трей",
   "label.settings-startMaximizedCheckbox": "Запускать в полноэкранном режиме",
   "label.settings-startWindowsCheckbox": "Запуск с Windows (запустите от имени администратора, чтобы включить)",
+  "label.settings-startLinuxCheckbox": "Запуск с системой",
   "log.achievementsFileUpdatedFailed": "achievements:file-updated файла не сработал:",
   "log.appCloseFully": "Приложение будет полностью закрыто",
   "log.appCloseToTray": "Приложение закроется в трей",
