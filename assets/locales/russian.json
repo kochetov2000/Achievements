@@ -640,6 +640,8 @@
   "log.rarityRefreshFailed": "Rarity refresh failed:",
   "boot.onboarding.title": "Выбрать папки для авто-конфигурации",
   "boot.onboarding.message": "Was found folders with achievement data. Select which folders should be scanned automatically.",
+  "boot.onboarding.windowsLinuxPrefix": "Префикс Wine",
+  "boot.onboarding.setPrefix": "Установить префикс",
   "boot.onboarding.start": "Start Auto-Config",
   "boot.onboarding.skip": "Пропустить и игнорировать все",
   "boot.onboarding.ok": "OK",
@@ -748,6 +750,5 @@
   "main.update.progress.downloading": "Загрузка обновления...",
   "main.update.progress.completed": "Обновление загружено",
   "main.update.progress.failed": "Не удалось загрузить обновление",
-  "main.update.progress.failedWithError": "Не удалось загрузить обновление: {error}",
-  "windowsLinuxPrefixLabel": "Префикс Wine"
+  "main.update.progress.failedWithError": "Не удалось загрузить обновление: {error}"
 }

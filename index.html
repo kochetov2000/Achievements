@@ -4039,7 +4039,7 @@
         ></div>
         <p id="bootOnboardingHint" class="boot-onboarding-hint"></p>
         <div id="windowsLinuxPrefix" class="input-with-button settings-control">
-          <label for="windowsLinuxPrefixInputLabel"
+          <label id="windowsLinuxPrefixLabel"
             >Wine prefix:</label
           >
           <input
@@ -10336,6 +10336,8 @@
         }
       }
 
+      window.uiPreferencesLoaded = false;
+
       window.addEventListener("DOMContentLoaded", async () => {
         try {
           await loadPreferencesCached();
@@ -10793,6 +10795,8 @@
             }
           } catch {}
         }
+        window.uiPreferencesLoaded = true;
+        window.dispatchEvent(new CustomEvent("uiPreferencesLoaded"));
       });
 
       window.addEventListener("DOMContentLoaded", async () => {
@@ -17228,6 +17232,8 @@
           document.getElementById("windowsLinuxPrefix");
         const windowsLinuxPrefixInput = 
           document.getElementById("windowsLinuxPrefixInput");
+        const windowsLinuxPrefixLabel = 
+          document.getElementById("windowsLinuxPrefixLabel");
         const windowsLinuxPrefixInputFolder = document.getElementById("windowsLinuxPrefixInputFolder");
         const bootOnboardingHint =
           document.getElementById("bootOnboardingHint");
@@ -17514,6 +17520,18 @@
               "Start Auto-Config",
             );
           }
+          if (windowsLinuxPrefixLabel) {
+            windowsLinuxPrefixLabel.textContent = tUi(
+              "boot.onboarding.windowsLinuxPrefix",
+              "Wine prefix:",
+            );
+          }
+          if (bootOnboardingSetPrefixBtn) {
+            bootOnboardingSetPrefixBtn.textContent = tUi(
+              "boot.onboarding.setPrefix",
+              "Set prefix",
+            );
+          }
           if (bootOnboardingSkipBtn) {
             bootOnboardingSkipBtn.textContent = tUi(
               "boot.onboarding.skip",
@@ -17598,6 +17616,10 @@
         };
 
         const maybeStartBootOnboarding = () => {
+          if (!window.uiPreferencesLoaded) {
+            window.addEventListener("uiPreferencesLoaded", maybeStartBootOnboarding, { once: true });
+            return;
+          }
           if (bootOnboardingPromptDone || bootOnboardingPromptActive) return;
           if (document.body.classList.contains("booting")) return;
           runBootOnboardingFlow().catch(() => {
@@ -17631,22 +17653,22 @@
           ?.getBootStatus?.()
           .then((status) => {
             if (status?.uiReady) {
-              window.__bootUiReady = true;
-            }
+                window.__bootUiReady = true;
+              }
             if (status?.bootDone) {
-              window.__bootDone = true;
-            }
+                window.__bootDone = true;
+              }
             if (status?.bootManualSeedComplete) {
-              window.__bootManualSeedComplete = true;
-              window.__onBootManualSeedComplete?.();
-            }
+                window.__bootManualSeedComplete = true;
+                window.__onBootManualSeedComplete?.();
+              }
             window.__prepareDashboardForStartup?.();
             window.__markUiDataReady?.();
             maybeHideBootLoading();
             maybeStartBootOnboarding();
             if (status?.bootDone) {
-              refreshSteamOfficialAccountDropdownAfterBoot().catch(() => {});
-            }
+                refreshSteamOfficialAccountDropdownAfterBoot().catch(() => {});
+              }
           })
           .catch(() => {});
         window.api?.on?.("boot:ui-ready", () => {
