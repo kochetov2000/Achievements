@@ -1100,6 +1100,7 @@
                   </h4>
                   <div
                     id="settings-epicOfficialAccountStatus"
+                    data-i18n="settings.epicOfficialAccount.notConnected"
                     class="hint"
                     style="margin-top: 6px"
                   >
@@ -1414,7 +1415,7 @@
                         <span class="hint" data-i18n="shortcutsHintKeyboard"
                           >Keyboard:</span
                         >
-                        <div class="ctl-line sub">
+                        <div class="ctl-line sub" data-i18n="shortcutsHintContextMenu">
                           <kbd>≣ (Context Menu)</kbd>
                         </div>
                         <div class="ctl-line sub">
@@ -3770,7 +3771,7 @@
             title="Status filter"
             aria-label="Status filter"
           >
-            <span class="label">Status</span>
+            <span class="label" id="statusLabel">Status</span>
             <span id="achFilterStatusBtnState" class="state">All</span>
           </button>
           <button
@@ -3780,7 +3781,7 @@
             title="Sort by unlock date (old-new / new-old / off)"
             aria-label="Sort by unlock date"
           >
-            <span class="label">Date</span>
+            <span class="label" id="statusDate">Date</span>
             <span id="achSortTimeBtnDir" class="dir">·</span>
           </button>
           <button
@@ -3790,7 +3791,7 @@
             title="Sort by name (A-Z / Z-A / off)"
             aria-label="Sort by name"
           >
-            <span class="label">Name</span>
+            <span class="label" id="statusName">Name</span>
             <span id="achSortNameBtnDir" class="dir">·</span>
           </button>
           <button
@@ -3800,7 +3801,7 @@
             title="Sort by rarity (rare-common / common-rare / off)"
             aria-label="Sort by rarity"
           >
-            <span class="label">Rarity</span>
+            <span class="label" id="statusRarity">Rarity</span>
             <span id="achSortRarityBtnDir" class="dir">·</span>
           </button>
         </div>
@@ -6382,9 +6383,9 @@
         if (state === "off") return "·";
         if (sortType === "name") return state === "desc" ? "Z-A" : "A-Z";
         if (sortType === "time")
-          return state === "desc" ? "New-Old" : "Old-New";
+          return state === "desc" ? tUi("achievements.statusDateFilterNewOld", "New-Old") : tUi("achievements.statusDateFilterOldNew", "Old-New");
         if (sortType === "rarity")
-          return state === "desc" ? "Common-Rare" : "Rare-Common";
+          return state === "desc" ? tUi("achievements.statusRareFilterCommonRare", "Common-Rare") : tUi("achievements.statusRareFilterRareCommon", "Rare-Common");
         return "·";
       }
 
@@ -6403,7 +6404,7 @@
           );
         }
 
-        const setSortUi = (btnId, dirId, sortType, state) => {
+        const setSortUi = (btnId, dirId, sortType, state, title) => {
           const btn = document.getElementById(btnId);
           const dir = document.getElementById(dirId);
           if (dir) {
@@ -6412,6 +6413,7 @@
           if (btn) {
             btn.classList.toggle("active", state !== "off");
           }
+          if (title) btn.title = title;
         };
 
         setSortUi(
@@ -6419,18 +6421,21 @@
           "achSortNameBtnDir",
           "name",
           achievementTableViewState.nameSort,
+          tUi("title.achSortNameBtn", "Sort by name (A-Z / Z-A / off)"),
         );
         setSortUi(
           "achSortTimeBtn",
           "achSortTimeBtnDir",
           "time",
           achievementTableViewState.timeSort,
+          tUi("title.achSortTimeBtn", "Sort by unlock date (old-new / new-old / off)"),
         );
         setSortUi(
           "achSortRarityBtn",
           "achSortRarityBtnDir",
           "rarity",
           achievementTableViewState.raritySort,
+          tUi("title.achSortRarityBtn", "Sort by rarity (rare-common / common-rare / off)"),
         );
       }
 
@@ -12599,7 +12604,7 @@
         else {
           startWindowsCheckbox.textContent = tUi(
             "label.settings-startLinuxCheckbox",
-            "Start with Linux"
+            "Start with system"
           )
         }
         const settingsMenu = document.getElementById("settingsMenu");
