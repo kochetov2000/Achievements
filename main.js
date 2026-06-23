@@ -62,6 +62,8 @@ const {
   parseKVBinary: parseSteamKv,
   extractUserStats,
   buildSnapshotFromAppcache,
+  normalizeAppcacheSchemaEntries,
+  enrichSchemaEntriesFromAppcacheSchemaFile,
   pickPreferredUserBin,
   parseUserBinName,
 } = require("./utils/steam-appcache");
@@ -1079,6 +1081,7 @@ const DEFAULT_PREFERENCES = {
   soundVolume: 100,
   preset: "default",
   notificationScale: 1,
+  playtimeNotificationScale: 1,
   notificationDuration: 0,
   position: "center-bottom",
   language: "english",
@@ -4876,6 +4879,10 @@ const UI_CONSOLE_SUPPRESS_PATTERNS = [
   /latest\.yml/i,
   /builder-util-runtime/i,
   /electron-updater/i,
+  /\bnet::ERR_[A-Z0-9_]+\b/i,
+  /\bERR_(?:NETWORK_ACCESS_DENIED|INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|CONNECTION_RESET|CONNECTION_REFUSED|CONNECTION_TIMED_OUT)\b/i,
+  /\bSimpleURLLoaderWrapper\b/i,
+  /node:electron\/js2c\/browser_init/i,
   /GitHubProvider\.getLatestVersion/i,
   /\bNsisUpdater\b/i,
   /\bAppUpdater\b/i,
@@ -5634,6 +5641,108 @@ async function runAchievementsGenerator(
   });
 }
 
+function createSchemaRegenerateTempRoot(platform, appid) {
+  const safePlatform = String(platform || "schema").replace(/[^\w.-]+/g, "_");
+  const safeAppId = String(appid || "unknown").replace(/[^\w.-]+/g, "_");
+  const token = crypto.randomBytes(4).toString("hex");
+  return path.join(
+    app.getPath("userData"),
+    "tmp",
+    "schema-regenerate",
+    `${safePlatform}-${safeAppId}-${Date.now()}-${token}`,
+  );
+}
+
+function validateGeneratedSchemaDir(schemaDir) {
+  const achJson = path.join(schemaDir, "achievements.json");
+  if (!fs.existsSync(achJson)) {
+    return {
+      ok: false,
+      message: tUi(
+        "main.message.schemaGeneratedMissing",
+        {},
+        "Generated achievements.json is missing",
+      ),
+    };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(achJson, "utf8"));
+    if (!Array.isArray(parsed)) {
+      return {
+        ok: false,
+        message: tUi(
+          "main.message.schemaGeneratedInvalidType",
+          {},
+          "Generated achievements.json is not an array",
+        ),
+      };
+    }
+    if (parsed.length === 0) {
+      return {
+        ok: false,
+        message: tUi(
+          "main.message.schemaGeneratedEmpty",
+          {},
+          "Generated achievements.json is empty",
+        ),
+      };
+    }
+    return { ok: true, count: parsed.length };
+  } catch (err) {
+    return {
+      ok: false,
+      message: tUi(
+        "main.message.schemaGeneratedInvalidJson",
+        { error: err?.message || err },
+        "Generated achievements.json is invalid: {error}",
+      ),
+    };
+  }
+}
+
+function replaceSchemaDirWithBackup(sourceDir, destDir) {
+  if (!fs.existsSync(sourceDir)) {
+    throw new Error("Generated schema directory is missing");
+  }
+  const parent = path.dirname(destDir);
+  const backupBase = path.join(
+    parent,
+    `${path.basename(destDir)}.__backup_${Date.now()}`,
+  );
+  const backupDir = getUniqueSiblingPath(backupBase);
+  const hadExisting = fs.existsSync(destDir);
+
+  fs.mkdirSync(parent, { recursive: true });
+  try {
+    if (hadExisting) {
+      fs.renameSync(destDir, backupDir);
+      copyFolderOverwrite(backupDir, destDir);
+    }
+    copyFolderOverwrite(sourceDir, destDir);
+    if (hadExisting) {
+      fs.rmSync(backupDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    try {
+      if (fs.existsSync(destDir)) {
+        fs.rmSync(destDir, { recursive: true, force: true });
+      }
+    } catch {}
+    try {
+      if (hadExisting && fs.existsSync(backupDir)) {
+        fs.renameSync(backupDir, destDir);
+      }
+    } catch (restoreErr) {
+      schemaLogger.error("schema:regenerate-restore-failed", {
+        destDir,
+        backupDir,
+        error: restoreErr?.message || String(restoreErr),
+      });
+    }
+    throw err;
+  }
+}
+
 async function ensureSchemaForApp(appid, platform = "steam", options = {}) {
   let appidStr = String(appid || "").trim();
   const onGenerationProgress =
@@ -5915,18 +6024,43 @@ async function ensureSchemaForApp(appid, platform = "steam", options = {}) {
       detail: "Starting schema generation",
       percent: 12,
     });
-    await runAchievementsGenerator(appid, schemaBase, app.getPath("userData"), {
-      platform: normalizedPlatform,
-      langs: getSchemaLanguagesFromPreferences(),
-      onProgress: (progress) => {
-        emitGenerationProgress({
-          ...progress,
-          percent:
-            18 +
-            Math.round(clampGenerationPercent(progress?.percent, 0) * 0.72),
+    const tempRoot = createSchemaRegenerateTempRoot(normalizedPlatform, appid);
+    const tempDestDir = path.join(tempRoot, normalizedPlatform, appid);
+    try {
+      await runAchievementsGenerator(appid, tempRoot, app.getPath("userData"), {
+        platform: normalizedPlatform,
+        langs: getSchemaLanguagesFromPreferences(),
+        onProgress: (progress) => {
+          emitGenerationProgress({
+            ...progress,
+            percent:
+              18 +
+              Math.round(clampGenerationPercent(progress?.percent, 0) * 0.72),
+          });
+        },
+      });
+      const validation = validateGeneratedSchemaDir(tempDestDir);
+      if (!validation.ok) {
+        ipcLogger.warn("schema:ensure-empty-output-kept-existing", {
+          appid,
+          platform: normalizedPlatform,
+          tempDestDir,
+          reason: validation.message,
         });
-      },
-    });
+        throw new Error(
+          tUi(
+            "main.message.schemaRegenerateSafeFailure",
+            { reason: validation.message },
+            "{reason}. Existing schema was kept unchanged.",
+          ),
+        );
+      }
+      replaceSchemaDirWithBackup(tempDestDir, destDir);
+    } finally {
+      try {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      } catch {}
+    }
     if (fs.existsSync(achJson)) {
       emitGenerationProgress({
         phase: "finalizing",
@@ -8341,25 +8475,20 @@ ipcMain.handle(
 
       if (normalizedPlatform === "steam-official") {
         const schemaPath = resolveConfigSchemaPath(config);
+        const statsDir = config.save_path || "";
         const schemaArr =
           schemaPath && fs.existsSync(schemaPath)
             ? JSON.parse(fs.readFileSync(schemaPath, "utf-8"))
             : [];
-        const entries = Array.isArray(schemaArr)
-          ? schemaArr
-            .map((e) => ({
-              api: e?.name || e?.api,
-              statId: e?.statId,
-              bit: e?.bit,
-            }))
-            .filter(
-              (e) =>
-                e.api &&
-                Number.isInteger(e.statId) &&
-                Number.isInteger(e.bit),
-            )
-          : [];
-        const statsDir = config.save_path || "";
+        let entries = normalizeAppcacheSchemaEntries(schemaArr);
+        const schemaBin =
+          statsDir && config.appid
+            ? path.join(statsDir, `UserGameStatsSchema_${config.appid}.bin`)
+            : "";
+        entries = enrichSchemaEntriesFromAppcacheSchemaFile(
+          entries,
+          schemaBin,
+        );
         const cached =
           (await loadPreviousAchievements(
             configName,
@@ -8876,9 +9005,13 @@ ipcMain.handle("config:blacklist", async (_event, payload = {}) => {
   });
 
   try {
-    if (!resolvedAppId && configPath && fs.existsSync(configPath)) {
+    if (
+      configPath &&
+      fs.existsSync(configPath) &&
+      (!resolvedAppId || !resolvedPlatform)
+    ) {
       const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      if (parsed?.appid) resolvedAppId = String(parsed.appid);
+      if (!resolvedAppId && parsed?.appid) resolvedAppId = String(parsed.appid);
       if (!resolvedPlatform && parsed?.platform) {
         resolvedPlatform = normalizeBlacklistPlatformValue(parsed.platform);
       }
@@ -9148,33 +9281,62 @@ ipcMain.handle("schema:regenerate", async (event, payload) => {
           percent: 90,
         });
       } else {
-        await runAchievementsGenerator(
-          appid,
-          SCHEMA_ROOT_PATH,
-          app.getPath("userData"),
-          {
-            platform,
-            langs: getSchemaLanguagesFromPreferences(),
-            onProgress: (progress) => {
-              const childPercent = clampGenerationPercent(progress?.percent, 0);
-              progressJob?.update({
-                phase: progress?.phase || "generatingSchema",
-                detail: progress?.detail || "",
-                current:
-                  Number.isFinite(Number(progress?.current)) &&
+        const tempRoot = createSchemaRegenerateTempRoot(platform, appid);
+        const tempDestDir = path.join(tempRoot, platform, appid);
+        try {
+          await runAchievementsGenerator(
+            appid,
+            tempRoot,
+            app.getPath("userData"),
+            {
+              platform,
+              langs: getSchemaLanguagesFromPreferences(),
+              onProgress: (progress) => {
+                const childPercent = clampGenerationPercent(
+                  progress?.percent,
+                  0,
+                );
+                progressJob?.update({
+                  phase: progress?.phase || "generatingSchema",
+                  detail: progress?.detail || "",
+                  current:
+                    Number.isFinite(Number(progress?.current)) &&
                     Number(progress.current) >= 0
-                    ? Number(progress.current)
-                    : 0,
-                total:
-                  Number.isFinite(Number(progress?.total)) &&
+                      ? Number(progress.current)
+                      : 0,
+                  total:
+                    Number.isFinite(Number(progress?.total)) &&
                     Number(progress.total) >= 0
-                    ? Number(progress.total)
-                    : 0,
-                percent: 18 + Math.round(childPercent * 0.72),
-              });
+                      ? Number(progress.total)
+                      : 0,
+                  percent: 18 + Math.round(childPercent * 0.72),
+                });
+              },
             },
-          },
-        );
+          );
+          const validation = validateGeneratedSchemaDir(tempDestDir);
+          if (!validation.ok) {
+            ipcLogger.warn("schema:regenerate-empty-output-kept-existing", {
+              appid,
+              name: safeName,
+              platform,
+              tempDestDir,
+              reason: validation.message,
+            });
+            throw new Error(
+              tUi(
+                "main.message.schemaRegenerateSafeFailure",
+                { reason: validation.message },
+                "{reason}. Existing schema was kept unchanged.",
+              ),
+            );
+          }
+          replaceSchemaDirWithBackup(tempDestDir, destDir);
+        } finally {
+          try {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+          } catch {}
+        }
       }
     } catch (err) {
       ipcLogger.error("schema:regenerate-failed", {
@@ -9906,6 +10068,11 @@ function createNotificationWindow(message) {
       y = ay + ah - Math.floor(scaledHeight) - gapY;
       break;
 
+    case "middle-right":
+      x = ax + aw - scaledWidth - gapX;
+      y = ay + Math.floor((ah - scaledHeight) / 2);
+      break;
+
     case "top-left":
       x = ax + gapX;
       y = ay + gapY;
@@ -9914,6 +10081,11 @@ function createNotificationWindow(message) {
     case "bottom-left":
       x = ax + gapX;
       y = ay + ah - Math.floor(scaledHeight) - gapY;
+      break;
+
+    case "middle-left":
+      x = ax + gapX;
+      y = ay + Math.floor((ah - scaledHeight) / 2);
       break;
 
     case "center-bottom":
@@ -9984,6 +10156,7 @@ function createNotificationWindow(message) {
       description: message.description,
       iconPath: iconPathToSend,
       scale,
+      durationOverridden: !!message?.durationOverridden,
     });
   });
 
@@ -10586,6 +10759,7 @@ function processNextNotification() {
   const duration =
     overrideDurationMs || getPresetAnimationDuration(presetFolder);
   notificationData.durationMs = duration;
+  notificationData.durationOverridden = overrideDurationMs > 0;
   const notificationWindow = createNotificationWindow(notificationData);
   const notificationWebContentsId = notificationWindow.webContents.id;
 
@@ -11885,20 +12059,18 @@ async function monitorAchievementsFile(filePath) {
           schemaPath && fs.existsSync(schemaPath)
             ? JSON.parse(fs.readFileSync(schemaPath, "utf8"))
             : [];
-        const entries = Array.isArray(schemaArr)
-          ? schemaArr
-            .map((e) => ({
-              api: e?.name || e?.api,
-              statId: e?.statId,
-              bit: e?.bit,
-            }))
-            .filter(
-              (e) =>
-                e.api &&
-                Number.isInteger(e.statId) &&
-                Number.isInteger(e.bit),
-            )
-          : [];
+        let entries = normalizeAppcacheSchemaEntries(schemaArr);
+        const schemaBin =
+          statsDir && configMeta?.appid
+            ? path.join(
+                statsDir,
+                `UserGameStatsSchema_${configMeta.appid}.bin`,
+              )
+            : "";
+        entries = enrichSchemaEntriesFromAppcacheSchemaFile(
+          entries,
+          schemaBin,
+        );
         let userBin = activeFilePath;
         const base = path.basename(userBin || "").toLowerCase();
         if (!base.startsWith("usergamestats_") || !base.endsWith(".bin")) {
@@ -12098,9 +12270,13 @@ async function monitorAchievementsFile(filePath) {
           const isBin = path.basename(activeFilePath).endsWith(".bin");
           for (const key of pendingProgress) {
             const cur = currentAchievements[key];
-            const achievementConfig = isBin
-              ? crcMap[key.toLowerCase()]
-              : fullConfig.find((a) => a.name === key || a.name === cur?.name);
+            const achievementConfig = isSteamOfficial
+              ? fullConfig.find((a) => a.name === key || a.name === cur?.name)
+              : isBin
+                ? crcMap[key.toLowerCase()]
+                : fullConfig.find(
+                    (a) => a.name === key || a.name === cur?.name,
+                  );
             if (!achievementConfig) continue;
 
             queueProgressNotification({
@@ -12202,9 +12378,11 @@ async function monitorAchievementsFile(filePath) {
       if (progressChanged) {
         touchedInLoop = true;
         const isBin = path.basename(filePath).endsWith(".bin");
-        const achievementConfig = isBin
-          ? crcMap[key.toLowerCase()]
-          : fullConfig.find((a) => a.name == key || a.name == current?.name);
+        const achievementConfig = isSteamOfficial
+          ? fullConfig.find((a) => a.name == key || a.name == current?.name)
+          : isBin
+            ? crcMap[key.toLowerCase()]
+            : fullConfig.find((a) => a.name == key || a.name == current?.name);
 
         if (achievementConfig) {
           if (!global.disableProgress) {
@@ -16577,6 +16755,10 @@ function showProgressNotification(data) {
       x = ax + aw - progressWidth - gapX;
       y = ay + ah - progressHeight - gapY;
       break;
+    case "middle-right":
+      x = ax + aw - progressWidth - gapX;
+      y = ay + Math.floor((ah - progressHeight) / 2);
+      break;
     case "top-left":
       x = ax + gapX;
       y = ay + gapY;
@@ -16584,6 +16766,10 @@ function showProgressNotification(data) {
     case "bottom-left":
       x = ax + gapX;
       y = ay + ah - progressHeight - gapY;
+      break;
+    case "middle-left":
+      x = ax + gapX;
+      y = ay + Math.floor((ah - progressHeight) / 2);
       break;
     case "center-bottom":
     default:
@@ -16699,14 +16885,21 @@ function normalizePlayPayload(raw) {
     : p.phase === "stop"
       ? 2000
       : 0;
-  return { ...p, displayName, description, scale: 1, holdMs };
+  const scale = normalizeNotificationScale(p.scale).scale;
+  return { ...p, displayName, description, scale, holdMs };
+}
+
+function getPlaytimeNotificationScale(prefs = {}) {
+  return normalizeNotificationScale(prefs.playtimeNotificationScale ?? 1).scale;
 }
 
 ipcMain.on("show-playtime", (_event, playData) => {
+  let prefsSnapshot = {};
   try {
     const cur = fs.existsSync(preferencesPath)
       ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
       : {};
+    prefsSnapshot = cur && typeof cur === "object" ? cur : {};
     if (cur.disablePlaytime === true || global.disablePlaytime === true) {
       if (playtimeWindow && !playtimeWindow.isDestroyed())
         playtimeWindow.close();
@@ -16716,7 +16909,10 @@ ipcMain.on("show-playtime", (_event, playData) => {
     if (global.disablePlaytime === true) return;
   }
 
-  const normalized = normalizePlayPayload(playData);
+  const normalized = normalizePlayPayload({
+    ...(playData || {}),
+    scale: getPlaytimeNotificationScale(prefsSnapshot),
+  });
   if (isDuplicatePlay(normalized)) return;
   createPlaytimeWindow(normalized);
 });
@@ -16775,12 +16971,25 @@ function createPlaytimeWindow(playData = {}) {
   } = require("electron").screen.getPrimaryDisplay().workArea;
   const winWidth = 460;
   const winHeight = 340;
-  const x = Math.floor(ax + (aw - winWidth) / 2),
+  let playtimeScale = 1;
+  try {
+    const prefs = fs.existsSync(preferencesPath)
+      ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
+      : {};
+    playtimeScale = getPlaytimeNotificationScale(prefs);
+  } catch {}
+  const scaledWinWidth = Math.ceil(
+    winWidth * (playtimeScale > 1 ? playtimeScale : 1),
+  );
+  const scaledWinHeight = Math.ceil(
+    winHeight * (playtimeScale > 1 ? playtimeScale : 1),
+  );
+  const x = Math.floor(ax + (aw - scaledWinWidth) / 2),
     y = Math.floor(ay + 40);
 
   playtimeWindow = new BrowserWindow({
-    width: winWidth,
-    height: winHeight,
+    width: scaledWinWidth,
+    height: scaledWinHeight,
     x,
     y,
     frame: false,
@@ -16800,7 +17009,9 @@ function createPlaytimeWindow(playData = {}) {
     },
   });
   windowLogger.info("create-playtime-window:browserwindow-created", {
-    size: { width: winWidth, height: winHeight },
+    size: { width: scaledWinWidth, height: scaledWinHeight },
+    baseSize: { width: winWidth, height: winHeight },
+    scale: playtimeScale,
     position: { x, y },
   });
   playtimeWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -16815,7 +17026,7 @@ function createPlaytimeWindow(playData = {}) {
       const prefs = fs.existsSync(preferencesPath)
         ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
         : {};
-      const scale = normalizeNotificationScale(prefs.notificationScale).scale;
+      const scale = getPlaytimeNotificationScale(prefs);
       const source = pendingPlayData ?? playData;
       const payload = normalizePlayPayload({ ...source, phase, scale });
 
