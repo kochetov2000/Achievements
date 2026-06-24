@@ -6489,7 +6489,7 @@
           );
         }
 
-        const setSortUi = (btnId, dirId, sortType, state, title) => {
+        const setSortUi = (btnId, dirId, sortType, state) => {
           const btn = document.getElementById(btnId);
           const dir = document.getElementById(dirId);
           if (dir) {
@@ -6498,7 +6498,6 @@
           if (btn) {
             btn.classList.toggle("active", state !== "off");
           }
-          if (title) btn.title = title;
         };
 
         setSortUi(
@@ -6506,21 +6505,19 @@
           "achSortNameBtnDir",
           "name",
           achievementTableViewState.nameSort,
-          tUi("title.achSortNameBtn", "Sort by name (A-Z / Z-A / off)"),
+																		
         );
         setSortUi(
           "achSortTimeBtn",
           "achSortTimeBtnDir",
           "time",
           achievementTableViewState.timeSort,
-          tUi("title.achSortTimeBtn", "Sort by unlock date (old-new / new-old / off)"),
         );
         setSortUi(
           "achSortRarityBtn",
           "achSortRarityBtnDir",
           "rarity",
-          achievementTableViewState.raritySort,
-          tUi("title.achSortRarityBtn", "Sort by rarity (rare-common / common-rare / off)"),
+          achievementTableViewState.raritySort,														
         );
       }
 
