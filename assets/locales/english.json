@@ -536,6 +536,8 @@
   "title.tab-platformGuide": "Platform & Emulator Guide",
   "title.tab-shortcuts": "Keyboard & Controller Shortcuts",
   "shortcutsHintKeyboard": "Keyboard:",
+  "shortcutsHintContextMenu": "<kbd>≣ (Context Menu)</kbd>",
+  "shortcutsHintSpace": "<kbd>Space</kbd>",
   "shortcutsHintController": "Controller:",
   "shortcutsHintMouse": "Mouse:",
   "shortcutsBrandXbox": "Xbox:",

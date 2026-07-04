@@ -1486,7 +1486,7 @@
                         <span class="hint" data-i18n="shortcutsHintKeyboard"
                           >Keyboard:</span
                         >
-                        <div class="ctl-line sub" data-i18n="shortcutsHintContextMenu">
+                        <div class="ctl-line sub HintContextMenu">
                           <kbd>≣ (Context Menu)</kbd>
                         </div>
                         <div class="ctl-line sub">
@@ -1643,7 +1643,7 @@
                           >Keyboard:</span
                         >
                         <div class="ctl-line sub"><kbd>Enter</kbd></div>
-                        <div class="ctl-line sub"><kbd>Space</kbd></div>
+                        <div class="ctl-line sub HintSpace"><kbd>Space</kbd></div>
                       </div>
                       <div class="ctl-line">
                         <span class="hint" data-i18n="shortcutsHintController"
@@ -20598,6 +20598,15 @@
           ) {
             window.i18nUi.applyLocaleStrings(strings);
           }
+          hintsTranslate();
+        }
+        function hintsTranslate() {
+            for (elem of document.getElementsByClassName("HintSpace")) {
+              elem.innerHTML = tUi("shortcutsHintSpace", "<kbd>Space</kbd>");
+            }
+            for (elem of document.getElementsByClassName("HintContextMenu")) {
+              elem.innerHTML = tUi("shortcutsHintContextMenu", "<kbd>≣ (Context Menu)</kbd>");
+            }
         }
         window.ensureShortcutsTabContent = ensureShortcutsTabContent;
         function focusFirstInActiveSection() {
