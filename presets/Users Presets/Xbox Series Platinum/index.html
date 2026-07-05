@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="style.css" />
     <title>Popup Animation</title>
-    <meta name="duration" content="11000" />
+    <meta name="duration" content="11500" />
     <style>
       html,
       body {
@@ -38,6 +38,7 @@
         <div class="achievement-loader"></div>
         <div class="achievement-trophy xbox-icon xbox-logo"></div>
         <div class="achievement-content">
+          <img src="image.png" class="laurel-wreath" alt="Laurel Wreath" />
           <div class="icon">
             <img src="" alt="Icon" />
           </div>
@@ -125,6 +126,15 @@
           container.style.setProperty("--scale", String(safeScale));
         };
 
+        const toLocalAssetSrc = (relativePath, { bustCache = false } = {}) => {
+          const normalized = String(relativePath || "").trim();
+          if (!normalized) return "";
+          const suffix = bustCache
+            ? `${normalized.includes("?") ? "&" : "?"}t=${Date.now()}`
+            : "";
+          return `${normalized}${suffix}`;
+        };
+
         const resetAnimations = (elements) => {
           elements.forEach((el) => {
             if (!el) return;
@@ -140,7 +150,7 @@
 
         const restartAnimation = () => {
           const animatedNodes = container.querySelectorAll(
-            ".achievement-banner, .achievement-loader, .achievement-trophy, .icon img, .achievement-banner .title, .achievement-banner .detail",
+            ".achievement-banner, .achievement-loader, .achievement-trophy, .icon img, .laurel-wreath, .achievement-banner .title, .achievement-banner .detail",
           );
           resetAnimations(Array.from(animatedNodes));
         };
@@ -387,11 +397,36 @@
               : "";
 
           const rawIcon = notificationData.iconPath || notificationData.icon;
-          if (rawIcon) {
-            const normalized = String(rawIcon).replace(/\\/g, "/");
-            iconEl.src = normalized.startsWith("file://")
-              ? normalized
-              : `file:///${normalized}`;
+          const resolvedNotificationIcon = rawIcon
+            ? (() => {
+                const normalized = String(rawIcon).replace(/\\/g, "/");
+                return normalized.startsWith("file://")
+                  ? normalized
+                  : `file:///${normalized}`;
+              })()
+            : "";
+          const platinumDiamondIcon = toLocalAssetSrc("./diamond.gif", {
+            bustCache: true,
+          });
+
+          iconEl.onerror = () => {
+            iconEl.onerror = null;
+            if (
+              notificationData.isPlatinum === true &&
+              resolvedNotificationIcon &&
+              iconEl.src !== resolvedNotificationIcon
+            ) {
+              iconEl.src = resolvedNotificationIcon;
+            }
+          };
+
+          if (notificationData.isPlatinum === true) {
+            iconEl.removeAttribute("src");
+            iconEl.src = platinumDiamondIcon;
+          } else if (resolvedNotificationIcon) {
+            iconEl.src = resolvedNotificationIcon;
+          } else {
+            iconEl.removeAttribute("src");
           }
 
           const total = getCloseDelay();

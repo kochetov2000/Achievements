@@ -85,6 +85,7 @@ const {
   writeAchievementPercentagesSidecar,
   readAchievementPercentagesMap,
   mergeRarityIntoAchievements,
+  normalizeRarityPercent,
 } = require("./utils/achievement-rarity");
 const { ensureGogAccessToken } = require("./utils/gog-auth");
 const {
@@ -1096,7 +1097,11 @@ const DEFAULT_PREFERENCES = {
   disableHardwareAcceleration: true,
   disableUpdate: false,
   disablePlaytime: false,
+  showNotificationRarityPercentage: true,
   progressPosition: "bottom-left",
+  rareSound: "mute",
+  rarePreset: "default",
+  rarePosition: "center-bottom",
   platinumSound: "mute",
   platinumPreset: "default",
   platinumPosition: "center-bottom",
@@ -6833,7 +6838,7 @@ ipcMain.handle("get-sound-files", () => {
   if (!fs.existsSync(userSoundsFolder)) return [];
   const files = fs
     .readdirSync(userSoundsFolder)
-    .filter((file) => file.endsWith(".wav"));
+    .filter((file) => file.toLowerCase().endsWith(".wav"));
   return files;
 });
 
@@ -9470,6 +9475,65 @@ function getUserPreferredSound() {
   }
 }
 
+const RANDOM_SOUND_VALUE = "random";
+let lastRandomAchievementSound = "";
+let lastRandomRareSound = "";
+let lastRandomPlatinumSound = "";
+let lastRandomTestSound = "";
+
+function getAvailableNotificationSounds() {
+  try {
+    if (!fs.existsSync(userSoundsFolder)) return [];
+    return fs
+      .readdirSync(userSoundsFolder, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() && entry.name.toLowerCase().endsWith(".wav"),
+      )
+      .map((entry) => entry.name);
+  } catch (err) {
+    notificationLogger.warn("sound:random-list-failed", {
+      error: err?.message || String(err),
+    });
+    return [];
+  }
+}
+
+function resolveNotificationSound(sound, options = {}) {
+  const requested = String(sound || "mute").trim() || "mute";
+  if (requested !== RANDOM_SOUND_VALUE) return requested;
+
+  const isPlatinum = options.isPlatinum === true;
+  const isRare = options.isRare === true;
+  const isTest = options.isTest === true;
+  const sounds = getAvailableNotificationSounds();
+  if (!sounds.length) return "mute";
+
+  const previous = isTest
+    ? lastRandomTestSound
+    : isPlatinum
+      ? lastRandomPlatinumSound
+      : isRare
+        ? lastRandomRareSound
+        : lastRandomAchievementSound;
+  const candidates =
+    sounds.length > 1
+      ? sounds.filter((candidate) => candidate !== previous)
+      : sounds;
+  const selected = candidates[crypto.randomInt(candidates.length)];
+
+  if (isTest) {
+    lastRandomTestSound = selected;
+  } else if (isPlatinum) {
+    lastRandomPlatinumSound = selected;
+  } else if (isRare) {
+    lastRandomRareSound = selected;
+  } else {
+    lastRandomAchievementSound = selected;
+  }
+  return selected;
+}
+
 let tray = null;
 let trayMenuWindow = null;
 let isQuitting = false;
@@ -10155,6 +10219,12 @@ function createNotificationWindow(message) {
       displayName: message.displayName,
       description: message.description,
       iconPath: iconPathToSend,
+      headerPath: message.headerPath || "",
+      rarityPct: message.rarityPct,
+      isRare: message.isRare === true,
+      isPlatinum: message.isPlatinum === true,
+      showRarityPercentage: message.showRarityPercentage === true,
+      preset: message.preset || preset,
       scale,
       durationOverridden: !!message?.durationOverridden,
     });
@@ -10211,14 +10281,21 @@ ipcMain.on("show-notification", async (_event, achievement) => {
 
   if (displayName && descriptionText) {
     const notificationData = {
+      name: achievement.name || achievement.api || "",
       displayName,
       description: descriptionText,
       icon: achievement.icon,
       icon_gray: achievement.icon_gray || achievement.icongray,
+      appid: achievement.appid || achievement.appId || null,
+      platform: normalizePlatform(achievement.platform) || null,
       config_path: achievement.config_path,
+      configName:
+        achievement.configName || achievement.config_name || configName || "",
       preset: achievement.preset,
       position: achievement.position,
       sound: achievement.sound,
+      rarityPct: achievement.rarityPct,
+      raritySource: achievement.raritySource,
     };
 
     queueAchievementNotification(notificationData);
@@ -10230,6 +10307,7 @@ ipcMain.on("show-notification", async (_event, achievement) => {
         earned: true,
         progress: achievement.progress || undefined,
         max_progress: achievement.max_progress || undefined,
+        progress_is_float: achievement.progress_is_float || undefined,
         earned_time: Date.now(),
       };
       if (selectedConfig) {
@@ -10404,8 +10482,100 @@ ipcMain.on("show-test-notification", (event, options) => {
   queueAchievementNotification(notificationData);
 });
 
+function getRandomTestRareRarity() {
+  const tiers = [
+    { name: "gold", min: 0.01, max: 1 },
+    { name: "silver", min: 1.01, max: 5 },
+    { name: "bronze", min: 5.01, max: 10 },
+  ];
+  const tier = tiers[crypto.randomInt(tiers.length)];
+  const percent =
+    Math.round((tier.min + Math.random() * (tier.max - tier.min)) * 100) / 100;
+  return { tier: tier.name, percent };
+}
+
+ipcMain.on("show-test-rare-notification", (_event, options = {}) => {
+  const prefs = cachedPreferences || {};
+  const baseDir = app.isPackaged ? process.resourcesPath : __dirname;
+  const rarity = getRandomTestRareRarity();
+  const tierLabel =
+    rarity.tier.charAt(0).toUpperCase() + rarity.tier.slice(1);
+
+  queueAchievementNotification({
+    name: `TEST_RARE_NOTIFICATION_${rarity.tier.toUpperCase()}`,
+    displayName: `${tierLabel} Rare Test`,
+    description: `Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`,
+    icon: ICON_PNG_PATH,
+    icon_gray: ICON_PNG_PATH,
+    config_path: baseDir,
+    rarityPct: rarity.percent,
+    raritySource: "test",
+    preset: options.preset || prefs.rarePreset || prefs.preset || "default",
+    position:
+      options.position ||
+      prefs.rarePosition ||
+      prefs.position ||
+      "center-bottom",
+    sound: options.sound || prefs.rareSound || prefs.sound || "mute",
+    scale: parseFloat(
+      options.scale != null
+        ? options.scale
+        : prefs.notificationScale != null
+          ? prefs.notificationScale
+          : 1,
+    ),
+    skipScreenshot: true,
+    isTest: true,
+    isTestRare: true,
+  });
+});
+
 // Add new IPC handler for Platinum Achievement
 const platinumDedup = new Set();
+
+ipcMain.on("show-test-platinum-notification", (_event, options = {}) => {
+  const prefs = cachedPreferences || {};
+  const baseDir = app.isPackaged ? process.resourcesPath : __dirname;
+
+  queueAchievementNotification({
+    name: "TEST_PLATINUM_NOTIFICATION",
+    displayName: tUi(
+      "main.notify.platinumCompleteTitle",
+      {},
+      "100% Completed",
+    ),
+    description: tUi(
+      "main.notify.platinumCompleteDescription",
+      {},
+      "You've unlocked all achievements!",
+    ),
+    icon: ICON_PNG_PATH,
+    icon_gray: ICON_PNG_PATH,
+    config_path: baseDir,
+    preset:
+      options.preset ||
+      prefs.platinumPreset ||
+      prefs.preset ||
+      "default",
+    position:
+      options.position ||
+      prefs.platinumPosition ||
+      prefs.position ||
+      "center-bottom",
+    sound: options.sound || prefs.platinumSound || prefs.sound || "mute",
+    scale: parseFloat(
+      options.scale != null
+        ? options.scale
+        : prefs.notificationScale != null
+          ? prefs.notificationScale
+          : 1,
+    ),
+    skipScreenshot: true,
+    isTest: true,
+    isPlatinum: true,
+    __isPlatinum: true,
+  });
+});
 
 function markConfigPlatinumFlag(configName) {
   const safe = configName ? sanitizeConfigName(configName) : "";
@@ -10636,8 +10806,153 @@ function armPendingNotificationScreenshot(
   pendingNotificationScreenshots.set(webContentsId, state);
 }
 
+function normalizeNotificationRarityPercent(value) {
+  const normalized = normalizeRarityPercent(value);
+  if (normalized !== null) return normalized;
+  if (typeof value !== "string") return null;
+  const match = value.replace(",", ".").trim().match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  return normalizeRarityPercent(Number(match[0]));
+}
+
+function resolveNotificationRarityFromPayload(achievement = {}) {
+  const rarityObject =
+    achievement?.rarity && typeof achievement.rarity === "object"
+      ? achievement.rarity
+      : null;
+  const candidates = [
+    rarityObject?.pct,
+    rarityObject?.percent,
+    rarityObject?.value,
+    achievement?.rarityPct,
+    achievement?.rarity_percent,
+    achievement?.unlockRate,
+    achievement?.unlock_rate,
+    achievement?.globalPercent,
+    achievement?.global_percent,
+    achievement?.percent,
+    typeof achievement?.rarity === "number" ||
+    typeof achievement?.rarity === "string"
+      ? achievement.rarity
+      : null,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeNotificationRarityPercent(candidate);
+    if (normalized !== null) return normalized;
+  }
+  return null;
+}
+
+function getNotificationAchievementKeys(achievement = {}) {
+  const candidates = [
+    achievement?.name,
+    achievement?.api,
+    achievement?.achievementName,
+    achievement?.achievement_name,
+    achievement?.achievementKey,
+    achievement?.achievement_key,
+    achievement?.key,
+  ];
+  const keys = [];
+  for (const candidate of candidates) {
+    const key = String(candidate ?? "").trim();
+    if (!key || keys.includes(key)) continue;
+    keys.push(key);
+  }
+  return keys;
+}
+
+function getNotificationRaritySidecarPaths(achievement = {}) {
+  const candidates = [];
+  const add = (candidate) => {
+    const normalized = String(candidate || "").trim();
+    if (!normalized || candidates.includes(normalized)) return;
+    candidates.push(normalized);
+  };
+  const configPath = String(
+    achievement?.config_path || achievement?.configPath || "",
+  ).trim();
+  const appid = String(achievement?.appid || achievement?.appId || "").trim();
+
+  if (configPath) {
+    const baseDir =
+      path.extname(configPath).toLowerCase() === ".json"
+        ? path.dirname(configPath)
+        : configPath;
+    add(path.join(baseDir, "achievementpercentages.json"));
+    add(path.join(baseDir, "steam_settings", "achievementpercentages.json"));
+    if (appid) {
+      add(path.join(baseDir, appid, "achievementpercentages.json"));
+    }
+  }
+
+  const configName =
+    achievement?.configName ||
+    achievement?.config_name ||
+    achievement?.config ||
+    "";
+  const config = configName ? readConfigForAchievementCache(configName) : null;
+  if (config) {
+    const schemaPath = resolveAchievementsSchemaPath(config);
+    if (schemaPath) {
+      add(path.join(path.dirname(schemaPath), "achievementpercentages.json"));
+    }
+  }
+  return candidates;
+}
+
+function resolveNotificationRarity(achievement = {}) {
+  const direct = resolveNotificationRarityFromPayload(achievement);
+  if (direct !== null) {
+    return {
+      percent: direct,
+      source: String(achievement?.raritySource || "").trim() || null,
+    };
+  }
+
+  const keys = getNotificationAchievementKeys(achievement);
+  if (!keys.length) return { percent: null, source: null };
+  for (const sidecarPath of getNotificationRaritySidecarPaths(achievement)) {
+    try {
+      const rarityInfo = readAchievementPercentagesMap(sidecarPath);
+      if (!(rarityInfo?.map instanceof Map) || !rarityInfo.map.size) continue;
+      const lowerMap = new Map(
+        Array.from(rarityInfo.map.entries()).map(([name, percent]) => [
+          String(name).toLowerCase(),
+          percent,
+        ]),
+      );
+      for (const key of keys) {
+        const percent =
+          rarityInfo.map.get(key) ?? lowerMap.get(key.toLowerCase()) ?? null;
+        const normalized = normalizeNotificationRarityPercent(percent);
+        if (normalized === null) continue;
+        return {
+          percent: normalized,
+          source: rarityInfo.source || null,
+        };
+      }
+    } catch (err) {
+      notificationLogger.warn("notification:rarity-read-failed", {
+        sidecarPath,
+        error: err?.message || String(err),
+      });
+    }
+  }
+  return { percent: null, source: null };
+}
+
 function queueAchievementNotification(achievement) {
   const prefs = cachedPreferences || {};
+  const isPlatinum =
+    achievement.isPlatinum === true || achievement.__isPlatinum === true;
+  const isTest = achievement.isTest === true;
+  const isTestRare = achievement.isTestRare === true;
+  const rarity = isPlatinum || (isTest && !isTestRare)
+    ? { percent: null, source: null }
+    : resolveNotificationRarity(achievement);
+  const isRare =
+    rarity.percent !== null && rarity.percent >= 0 && rarity.percent <= 10;
   const preferredScale =
     achievement.scale != null
       ? achievement.scale
@@ -10650,15 +10965,24 @@ function queueAchievementNotification(achievement) {
   const displayName = getSafeLocalizedText(achievement.displayName, lang);
   const description = getSafeLocalizedText(achievement.description, lang);
 
-  const resolvedPreset =
+  const normalPreset =
     achievement.preset || selectedPreset || prefs.preset || "default";
-  const resolvedPosition =
+  const normalPosition =
     achievement.position ||
     selectedPosition ||
     prefs.position ||
     "center-bottom";
-  const resolvedSound =
+  const normalSound =
     achievement.sound || selectedSound || prefs.sound || "mute";
+  const resolvedPreset = isRare
+    ? prefs.rarePreset || normalPreset
+    : normalPreset;
+  const resolvedPosition = isRare
+    ? prefs.rarePosition || normalPosition
+    : normalPosition;
+  const requestedSound = isRare
+    ? prefs.rareSound || normalSound
+    : normalSound;
   const resolvedSkipScreenshot =
     achievement.skipScreenshot === true
       ? true
@@ -10669,17 +10993,24 @@ function queueAchievementNotification(achievement) {
     description: description || "",
     icon: achievement.icon,
     icon_gray: achievement.icon_gray || achievement.icongray,
+    appid: achievement.appid || achievement.appId || null,
+    platform: normalizePlatform(achievement.platform) || null,
     config_path: achievement.config_path,
     configName: achievement.configName || achievement.config_name || "",
+    name: getNotificationAchievementKeys(achievement)[0] || "",
+    rarityPct: rarity.percent,
+    raritySource: rarity.source,
+    isRare,
+    showRarityPercentage: prefs.showNotificationRarityPercentage !== false,
     preset: resolvedPreset,
     position: resolvedPosition,
-    sound: resolvedSound,
+    sound: requestedSound,
     scale: parseFloat(achievement.scale || 1),
     skipScreenshot: resolvedSkipScreenshot,
-    isTest: !!achievement.isTest,
+    isPlatinum,
+    isTest,
   };
 
-  const isPlatinum = achievement.__isPlatinum === true;
   if (!notificationData.isTest && !isPlatinum) {
     const now = Date.now();
     pruneRecentAchievementNotificationKeys(now);
@@ -10694,8 +11025,18 @@ function queueAchievementNotification(achievement) {
     recentAchievementNotificationKeys.set(dedupeKey, now);
   }
 
+  notificationData.sound = resolveNotificationSound(requestedSound, {
+    isPlatinum,
+    isRare,
+    isTest: notificationData.isTest,
+  });
+
   notificationLogger.info("queue-achievement", {
     displayName: notificationData.displayName,
+    name: notificationData.name || null,
+    rarityPct: notificationData.rarityPct,
+    rare: notificationData.isRare,
+    platinum: notificationData.isPlatinum === true,
     preset: notificationData.preset || "default",
     position: notificationData.position || "center-bottom",
     config: notificationData.config_path || null,
@@ -10708,6 +11049,50 @@ function queueAchievementNotification(achievement) {
   processNextNotification();
 }
 
+function resolveGameHeaderPathForNotification(achievement = {}) {
+  const appid = String(achievement.appid || achievement.appId || "").trim();
+  if (!appid) return "";
+  let platform = normalizePlatform(achievement.platform);
+  if (!platform) {
+    const configPath = String(achievement.config_path || "").trim();
+    if (configPath && fs.existsSync(configPath)) {
+      try {
+        const rawConfig = fs.readFileSync(configPath, "utf8");
+        const parsedConfig = JSON.parse(rawConfig);
+        platform = normalizePlatform(parsedConfig?.platform);
+      } catch {}
+    }
+  }
+  if (!platform) return "";
+  const headerPath = path.join(
+    app.getPath("userData"),
+    "images",
+    platform,
+    appid,
+    "header.jpg",
+  );
+  try {
+    return fs.existsSync(headerPath) ? headerPath : "";
+  } catch {
+    return "";
+  }
+}
+
+function resolveGameCoverHeaderPathForNotification(
+  achievement = {},
+  { useRandomTestImage = false, useFallbackImage = true } = {},
+) {
+  if (useRandomTestImage) {
+    return getRandomLocalHeaderImagePath({
+      fallbackToDefault: useFallbackImage,
+    });
+  }
+
+  const headerPath = resolveGameHeaderPathForNotification(achievement);
+  if (headerPath) return headerPath;
+  return useFallbackImage ? getNotificationFallbackHeaderPath() : "";
+}
+
 function processNextNotification() {
   if (isNotificationShowing || earnedNotificationQueue.length === 0) return;
 
@@ -10717,18 +11102,33 @@ function processNextNotification() {
   const lang = selectedLanguage || "english";
 
   const notificationData = {
+    name: achievement.name || "",
     displayName: achievement.displayName,
     description: achievement.description,
     icon: achievement.icon,
     icon_gray: achievement.icon_gray,
+    appid: achievement.appid || achievement.appId || null,
+    platform: normalizePlatform(achievement.platform) || null,
     config_path: achievement.config_path,
+    configName: achievement.configName || "",
+    rarityPct: achievement.rarityPct,
+    raritySource: achievement.raritySource || null,
+    isRare: achievement.isRare === true,
+    showRarityPercentage:
+      cachedPreferences.showNotificationRarityPercentage !== false,
     preset: achievement.preset,
     position: achievement.position,
     sound: achievement.sound,
     scale: parseFloat(achievement.scale || 1),
     skipScreenshot: !!achievement.skipScreenshot,
+    isPlatinum:
+      achievement.isPlatinum === true || achievement.__isPlatinum === true,
     isTest: !!achievement.isTest,
   };
+
+  const preset = achievement.preset || "default";
+  const { presetFolder } = resolveNotificationPresetFolder(preset);
+  const normalizedPreset = String(preset || "").trim().toLowerCase();
 
   const iconCandidate = notificationData.icon || notificationData.icon_gray;
   let iconPathFinal = resolveIconAbsolutePath(
@@ -10736,20 +11136,46 @@ function processNextNotification() {
     iconCandidate,
   );
 
+  if (
+    notificationData.isPlatinum &&
+    ["xbox series platinum - purple", "xbox series platinum"].includes(
+      normalizedPreset,
+    )
+  ) {
+    const diamondIconPath = path.join(presetFolder, "diamond.gif");
+    try {
+      if (fs.existsSync(diamondIconPath)) {
+        iconPathFinal = diamondIconPath;
+      }
+    } catch {}
+  }
+
   if (!iconPathFinal) {
     iconPathFinal = ICON_PATH;
   }
   notificationData.iconPath = iconPathFinal;
+  if (normalizedPreset === "game cover") {
+    const headerPath = resolveGameCoverHeaderPathForNotification(achievement, {
+      useRandomTestImage: notificationData.isTest === true,
+      useFallbackImage: true,
+    });
+    if (headerPath) {
+      notificationData.headerPath = headerPath;
+    }
+  } else if (normalizedPreset === "game header") {
+    const headerPath = resolveGameHeaderPathForNotification(achievement);
+    if (headerPath) {
+      notificationData.headerPath = headerPath;
+    }
+  }
   notificationLogger.info("show-notification", {
     displayName: notificationData.displayName,
     preset: notificationData.preset || "default",
     position: notificationData.position || "center-bottom",
+    showRarityPercentage: notificationData.showRarityPercentage,
     config: notificationData.config_path || null,
     iconResolved: iconPathFinal,
   });
-
-  const preset = achievement.preset || "default";
-  const { presetFolder } = resolveNotificationPresetFolder(preset);
 
   const overrideDurationSec = Number(cachedPreferences?.notificationDuration);
   const overrideDurationMs =
@@ -10880,19 +11306,28 @@ function queuePlatinumAfterCurrent(notificationData) {
 }
 
 function queueProgressNotification(data) {
-  if (global.disableProgress) return;
-  if (isProgressMutedByPrefs(cachedPreferences, data)) {
+  const isTestProgress = data?.isTestProgress === true;
+  if (!isTestProgress && global.disableProgress) return;
+  if (!isTestProgress && isProgressMutedByPrefs(cachedPreferences, data)) {
     notificationLogger.info("queue-progress:muted", {
       displayName: data?.displayName || "",
       config: data?.config_path || null,
     });
     return;
   }
+  const scale =
+    data?.scale != null
+      ? normalizeNotificationScale(data.scale).scale
+      : normalizeNotificationScale(
+          cachedPreferences?.notificationScale ?? 1,
+        ).scale;
+  data = { ...(data || {}), scale };
   notificationLogger.info("queue-progress", {
     displayName: data?.displayName || "",
     progress: data?.progress ?? null,
     max: data?.max_progress ?? null,
     config: data?.config_path || null,
+    scale,
   });
   progressNotificationQueue.push(data);
   processNextProgressNotification();
@@ -11568,6 +12003,7 @@ function savePreviousAchievements(
       "earned_time",
       "max_progress",
       "progress",
+      "progress_is_float",
     ]);
     for (const key of keys) {
       const entry = effectiveData?.[key];
@@ -11589,6 +12025,9 @@ function savePreviousAchievements(
       }
       if (Object.prototype.hasOwnProperty.call(entry, "progress")) {
         normalized.progress = entry.progress;
+      }
+      if (Object.prototype.hasOwnProperty.call(entry, "progress_is_float")) {
+        normalized.progress_is_float = entry.progress_is_float;
       }
       for (const [k, v] of Object.entries(entry)) {
         if (known.has(k)) continue;
@@ -12225,11 +12664,17 @@ async function monitorAchievementsFile(filePath) {
 
           if (achievementConfig) {
             queueAchievementNotification({
+              name: achievementConfig.name || key,
               displayName,
               description,
               icon: achievementConfig.icon,
               icon_gray: achievementConfig.icon_gray,
+              appid: currentAppId || null,
+              platform: currentPlatform || null,
               config_path: selectedConfigPath,
+              configName,
+              rarityPct: achievementConfig.rarityPct,
+              raritySource: achievementConfig.raritySource,
               preset: selectedPreset,
               position: selectedPosition,
               sound: selectedSound || "mute",
@@ -12243,6 +12688,7 @@ async function monitorAchievementsFile(filePath) {
               earned_time: current.earned_time || Date.now(),
               progress: current.progress,
               max_progress: current.max_progress,
+              progress_is_float: current.progress_is_float || undefined,
             };
           }
         });
@@ -12287,6 +12733,7 @@ async function monitorAchievementsFile(filePath) {
               icon: achievementConfig.icon,
               progress: cur.progress,
               max_progress: cur.max_progress,
+              progress_is_float: cur.progress_is_float || undefined,
               config_path: selectedConfigPath,
               configName,
             });
@@ -12326,6 +12773,7 @@ async function monitorAchievementsFile(filePath) {
         }
         if (achievementConfig) {
           const notificationData = {
+            name: achievementConfig.name || key,
             displayName:
               typeof achievementConfig.displayName === "object"
                 ? achievementConfig.displayName[lang] ||
@@ -12342,7 +12790,12 @@ async function monitorAchievementsFile(filePath) {
             icon: achievementConfig.icon,
             icon_gray:
               achievementConfig.icon_gray || achievementConfig.icongray,
+            appid: currentAppId || null,
+            platform: currentPlatform || null,
             config_path: selectedConfigPath,
+            configName,
+            rarityPct: achievementConfig.rarityPct,
+            raritySource: achievementConfig.raritySource,
             preset: selectedPreset,
             position: selectedPosition,
             sound: getUserPreferredSound() || "mute",
@@ -12394,6 +12847,7 @@ async function monitorAchievementsFile(filePath) {
               icon: achievementConfig.icon,
               progress: current.progress,
               max_progress: current.max_progress,
+              progress_is_float: current.progress_is_float || undefined,
               config_path: selectedConfigPath,
               configName,
             });
@@ -15942,11 +16396,17 @@ function notifyEpicOfficialUnlocks(config, schemaAchievements, unlockedKeys) {
     const achievementConfig = schemaMap.get(String(key || "").trim());
     if (!achievementConfig) continue;
     queueAchievementNotification({
+      name: achievementConfig.name || achievementConfig.api || key,
       displayName: achievementConfig.displayName,
       description: achievementConfig.description,
       icon: achievementConfig.icon,
       icon_gray: achievementConfig.icon_gray || achievementConfig.icongray,
+      appid: config?.appid || currentAppId || null,
+      platform: normalizePlatform(config?.platform) || null,
       config_path: config?.config_path || selectedConfigPath || "",
+      configName: config?.name || "",
+      rarityPct: achievementConfig.rarityPct,
+      raritySource: achievementConfig.raritySource,
       preset: selectedPreset,
       position: selectedPosition,
       sound: getUserPreferredSound() || "mute",
@@ -16691,9 +17151,13 @@ app.on("will-quit", () => {
 });
 
 function showProgressNotification(data) {
+  const scale = normalizeNotificationScale(
+    data?.scale ?? cachedPreferences?.notificationScale ?? 1,
+  ).scale;
   windowLogger.info("create-progress-window:start", {
     displayName: data?.displayName || "",
     config: data?.config_path || null,
+    scale,
   });
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
   const progressHtmlPath = resolveProgressTemplatePath();
@@ -16731,6 +17195,15 @@ function showProgressNotification(data) {
     width: aw,
     height: ah,
   } = screen.getPrimaryDisplay().workArea;
+  const scaledProgressWidth = Math.ceil(
+    progressWidth * (scale > 1 ? scale : 1),
+  );
+  const scaledProgressContentHeight = Math.ceil(
+    progressHeight * (scale > 1 ? scale : 1),
+  );
+  const progressAnimationPaddingY = Math.ceil(36 * (scale > 1 ? scale : 1));
+  const scaledProgressHeight =
+    scaledProgressContentHeight + progressAnimationPaddingY;
   const position =
     String(
       data?.position ||
@@ -16740,46 +17213,63 @@ function showProgressNotification(data) {
     ).trim() || "bottom-left";
   const gapX = 20;
   const gapY = 10;
+  const centeredPaddingOffsetY = Math.floor(progressAnimationPaddingY / 2);
   let x = ax + gapX;
-  let y = Math.max(0, ay + ah - progressHeight + gapY);
+  let y =
+    ay + ah - scaledProgressContentHeight - gapY - centeredPaddingOffsetY;
   switch (position) {
     case "center-top":
-      x = ax + Math.floor((aw - progressWidth) / 2);
-      y = ay + gapY;
+      x = ax + Math.floor((aw - scaledProgressWidth) / 2);
+      y = ay + gapY - centeredPaddingOffsetY;
       break;
     case "top-right":
-      x = ax + aw - progressWidth - gapX;
-      y = ay + gapY;
+      x = ax + aw - scaledProgressWidth - gapX;
+      y = ay + gapY - centeredPaddingOffsetY;
       break;
     case "bottom-right":
-      x = ax + aw - progressWidth - gapX;
-      y = ay + ah - progressHeight - gapY;
+      x = ax + aw - scaledProgressWidth - gapX;
+      y =
+        ay +
+        ah -
+        scaledProgressContentHeight -
+        gapY -
+        centeredPaddingOffsetY;
       break;
     case "middle-right":
-      x = ax + aw - progressWidth - gapX;
-      y = ay + Math.floor((ah - progressHeight) / 2);
+      x = ax + aw - scaledProgressWidth - gapX;
+      y = ay + Math.floor((ah - scaledProgressHeight) / 2);
       break;
     case "top-left":
       x = ax + gapX;
-      y = ay + gapY;
+      y = ay + gapY - centeredPaddingOffsetY;
       break;
     case "bottom-left":
       x = ax + gapX;
-      y = ay + ah - progressHeight - gapY;
+      y =
+        ay +
+        ah -
+        scaledProgressContentHeight -
+        gapY -
+        centeredPaddingOffsetY;
       break;
     case "middle-left":
       x = ax + gapX;
-      y = ay + Math.floor((ah - progressHeight) / 2);
+      y = ay + Math.floor((ah - scaledProgressHeight) / 2);
       break;
     case "center-bottom":
     default:
-      x = ax + Math.floor((aw - progressWidth) / 2);
-      y = ay + ah - progressHeight - gapY;
+      x = ax + Math.floor((aw - scaledProgressWidth) / 2);
+      y =
+        ay +
+        ah -
+        scaledProgressContentHeight -
+        gapY -
+        centeredPaddingOffsetY;
       break;
   }
   const progressWindow = new BrowserWindow({
-    width: progressWidth,
-    height: progressHeight,
+    width: scaledProgressWidth,
+    height: scaledProgressHeight,
     x,
     y,
     transparent: true,
@@ -16805,10 +17295,17 @@ function showProgressNotification(data) {
   progressWindow.setFocusable(false);
   progressWindow.loadFile(progressHtmlPath);
   windowLogger.info("create-progress-window:browserwindow-created", {
-    size: { width: progressWidth, height: progressHeight },
+    size: { width: scaledProgressWidth, height: scaledProgressHeight },
+    baseSize: { width: progressWidth, height: progressHeight },
+    contentSize: {
+      width: scaledProgressWidth,
+      height: scaledProgressContentHeight,
+    },
+    animationPaddingY: progressAnimationPaddingY,
     position: { x, y },
     durationMs: progressDurationMs,
     progressHtmlPath,
+    scale,
   });
 
   progressWindow.once("ready-to-show", () => {
@@ -16820,7 +17317,7 @@ function showProgressNotification(data) {
     });
     windowLogger.info("create-progress-window:ready-to-show");
     progressWindow.show();
-    progressWindow.webContents.send("show-progress", data);
+    progressWindow.webContents.send("show-progress", { ...data, scale });
   });
 
   setTimeout(() => {
@@ -16857,6 +17354,72 @@ ipcMain.on("set-disable-playtime", (_event, value) => {
 let playtimeWindow = null;
 let playtimeAlreadyClosing = false;
 let pendingPlayData = null;
+let lastRandomNotificationHeaderPath = "";
+
+function getNotificationFallbackHeaderPath() {
+  const candidates = [
+    path.join(app.getAppPath(), "assets", "achievements-wallpaper.png"),
+    path.join(app.getAppPath(), "assets", "achievements-logo.png"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  return candidates[0];
+}
+
+function getRandomLocalHeaderImagePath({ fallbackToDefault = true } = {}) {
+  const imagesRoot = path.join(app.getPath("userData"), "images");
+  const headers = [];
+  const pendingDirs = [imagesRoot];
+
+  while (pendingDirs.length) {
+    const currentDir = pendingDirs.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pendingDirs.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || entry.name.toLowerCase() !== "header.jpg") {
+        continue;
+      }
+      try {
+        if (fs.statSync(entryPath).size > 0) headers.push(entryPath);
+      } catch {}
+    }
+  }
+
+  let selectedPath = "";
+  if (headers.length) {
+    const candidates =
+      headers.length > 1
+        ? headers.filter((item) => item !== lastRandomNotificationHeaderPath)
+        : headers;
+    selectedPath = candidates[crypto.randomInt(candidates.length)];
+    lastRandomNotificationHeaderPath = selectedPath;
+  } else if (fallbackToDefault) {
+    selectedPath = getNotificationFallbackHeaderPath();
+  }
+
+  return selectedPath;
+}
+
+function getRandomTestPlaytimeHeaderUrl() {
+  const selectedPath = getRandomLocalHeaderImagePath({
+    fallbackToDefault: true,
+  });
+  return selectedPath
+    ? require("url").pathToFileURL(selectedPath).toString()
+    : "";
+}
 
 let __lastPlaySig = null,
   __lastPlayAt = 0;
@@ -16917,20 +17480,63 @@ ipcMain.on("show-playtime", (_event, playData) => {
   createPlaytimeWindow(normalized);
 });
 
+ipcMain.on("show-test-progress-notification", (_event, options = {}) => {
+  const maxProgress = 50;
+  const progress = crypto.randomInt(1, maxProgress + 1);
+  const position =
+    String(
+      options?.position ||
+        cachedPreferences?.progressPosition ||
+        DEFAULT_PREFERENCES.progressPosition ||
+        "bottom-left",
+    ).trim() || "bottom-left";
+
+  queueProgressNotification({
+    name: "TEST_PROGRESS_NOTIFICATION",
+    displayName: tUi(
+      "progress.testAchievementName",
+      {},
+      "Test Progress",
+    ),
+    progress,
+    max_progress: maxProgress,
+    position,
+    icon: "",
+    config_path: "",
+    isTestProgress: true,
+  });
+});
+
+ipcMain.on("show-test-playtime-notification", () => {
+  createPlaytimeWindow({
+    phase: "start",
+    displayName: "Achievements",
+    description: tUi("playtime.descStart", {}, "Playtime starting!"),
+    headerUrl: getRandomTestPlaytimeHeaderUrl(),
+    isTestPlaytime: true,
+  });
+});
+
 function createPlaytimeWindow(playData = {}) {
   windowLogger.info("create-playtime-window:start", {
     displayName: playData?.displayName || playData?.name || null,
     phase: playData?.phase || "start",
   });
   const phase = playData.phase || "start";
+  const isTestPlaytime = playData.isTestPlaytime === true;
 
   try {
     const cur = fs.existsSync(preferencesPath)
       ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
       : {};
-    if (cur.disablePlaytime === true || global.disablePlaytime === true) return;
+    if (
+      !isTestPlaytime &&
+      (cur.disablePlaytime === true || global.disablePlaytime === true)
+    ) {
+      return;
+    }
   } catch (e) {
-    if (global.disablePlaytime === true) return;
+    if (!isTestPlaytime && global.disablePlaytime === true) return;
   }
 
   if (playtimeWindow && !playtimeWindow.isDestroyed()) {

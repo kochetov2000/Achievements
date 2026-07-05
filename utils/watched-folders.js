@@ -5162,6 +5162,7 @@ module.exports = function makeWatchedFolders({
           if (!ready) continue;
         }
         onEarned({
+          name: String(cfgEntry?.name || achKey),
           displayName: cfgEntry
             ? getSafeLocalizedText(cfgEntry.displayName, lang)
             : achKey,
@@ -5170,8 +5171,12 @@ module.exports = function makeWatchedFolders({
             : "",
           icon: cfgEntry?.icon || "",
           icon_gray: cfgEntry?.icon_gray || cfgEntry?.icongray || "",
+          appid: String(meta?.appid || appid || ""),
           platform: meta?.platform || "",
           config_path: meta.config_path || null,
+          configName: meta?.name || null,
+          rarityPct: cfgEntry?.rarityPct,
+          raritySource: cfgEntry?.raritySource,
           preset: null,
           position: null,
           sound: null,
