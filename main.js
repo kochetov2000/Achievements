@@ -10460,8 +10460,16 @@ ipcMain.on("show-test-notification", (event, options) => {
   const baseDir = app.isPackaged ? process.resourcesPath : __dirname;
 
   const notificationData = {
-    displayName: "This is a testing achievement notification",
-    description: "This is a testing achievement notification for this app",
+    displayName: tUi(
+      "settings-testNotificationBtn",
+      {},
+      "This is a testing achievement notification",
+    ),
+    description: tUi(
+      "settings-testNotificationDescription",
+      {},
+      "This is a testing achievement notification for this app",
+    ),
     icon: ICON_PNG_PATH, // Use app icon
     icon_gray: ICON_PNG_PATH, // Use app icon
     config_path: baseDir, // Use app's directory
@@ -10484,9 +10492,9 @@ ipcMain.on("show-test-notification", (event, options) => {
 
 function getRandomTestRareRarity() {
   const tiers = [
-    { name: "gold", min: 0.01, max: 1 },
-    { name: "silver", min: 1.01, max: 5 },
-    { name: "bronze", min: 5.01, max: 10 },
+    { name: tUi("rarityGold", {}, "gold",), min: 0.01, max: 1 },
+    { name: tUi("raritySilver", {}, "silver",), min: 1.01, max: 5 },
+    { name: tUi("rarityBronze", {}, "bronze",), min: 5.01, max: 10 },
   ];
   const tier = tiers[crypto.randomInt(tiers.length)];
   const percent =
@@ -10503,8 +10511,17 @@ ipcMain.on("show-test-rare-notification", (_event, options = {}) => {
 
   queueAchievementNotification({
     name: `TEST_RARE_NOTIFICATION_${rarity.tier.toUpperCase()}`,
-    displayName: `${tierLabel} Rare Test`,
-    description: `Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`,
+    displayName: tUi(
+      "settings-testRareNotification",
+      {tier: tierLabel},
+      `${tierLabel} Rare Test`
+    ),
+    description: tUi(
+      "settings-testRareNotificationDescription",
+      {tier: tierLabel.toLowerCase(), percent: rarity.percent},
+      `Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`
+    ),
+    //`Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`,
     icon: ICON_PNG_PATH,
     icon_gray: ICON_PNG_PATH,
     config_path: baseDir,
