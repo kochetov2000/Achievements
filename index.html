@@ -2083,7 +2083,7 @@
                             >(cycle presets)</span
                           >
                         </div>
-                        <div class="ctl-line sub">
+                        <div class="ctl-line sub HintCtrlAltShiftArrow">
                           <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+Arrow
                           <span data-i18n="shortcutsCommonNudge20px"
                             >(nudge 20px)</span
@@ -21000,6 +21000,9 @@
             }
             for (elem of document.getElementsByClassName("HintContextMenu")) {
               elem.innerHTML = tUi("shortcutsHintContextMenu", "<kbd>≣ (Context Menu)</kbd>");
+            }
+            for (elem of document.getElementsByClassName("HintCtrlAltShiftArrow")) {
+              elem.innerHTML = tUi("shortcutsHintCtrlAltShiftArrow", "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+Arrow");
             }
         }
         window.ensureShortcutsTabContent = ensureShortcutsTabContent;

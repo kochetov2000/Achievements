@@ -548,6 +548,7 @@
   "shortcutsHintKeyboard": "Keyboard:",
   "shortcutsHintContextMenu": "<kbd>≣ (Context Menu)</kbd>",
   "shortcutsHintSpace": "<kbd>Space</kbd>",
+  "shortcutsHintCtrlAltShiftArrow": "<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+Arrow",
   "shortcutsHintController": "Controller:",
   "shortcutsHintMouse": "Mouse:",
   "shortcutsBrandXbox": "Xbox:",
