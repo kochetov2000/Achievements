@@ -1,4 +1,27 @@
 (() => {
+  const normalizeAppTheme = (value) => {
+    if (window.AppTheme?.normalizeAppTheme) {
+      return window.AppTheme.normalizeAppTheme(value);
+    }
+    return "dracula";
+  };
+  const applyAppTheme = (value) => {
+    if (window.AppTheme?.applyAppThemeToDocument) {
+      window.AppTheme.applyAppThemeToDocument(value);
+      return;
+    }
+    document.documentElement.dataset.theme = normalizeAppTheme(value);
+  };
+  const applyHardwareAccelerationPreference = (value) => {
+    if (window.AppTheme?.applyHardwareAccelerationPreferenceToDocument) {
+      window.AppTheme.applyHardwareAccelerationPreferenceToDocument(value);
+      return;
+    }
+    document.documentElement.dataset.hardwareAcceleration =
+      value === false ? "on" : "off";
+  };
+  applyHardwareAccelerationPreference(true);
+
   const sendAction = (action) => {
     if (window.api && typeof window.api.trayAction === "function") {
       window.api.trayAction(action);
@@ -50,6 +73,23 @@
         window.i18nUi.setUiLanguage(data.language);
       }
     });
+    window.api.on("tray:theme-changed", (data) => {
+      applyAppTheme(data?.appTheme);
+    });
+  }
+
+  if (window.api && typeof window.api.loadPreferences === "function") {
+    window.api
+      .loadPreferences()
+      .then((prefs) => {
+        applyAppTheme(prefs?.appTheme);
+        applyHardwareAccelerationPreference(
+          prefs?.disableHardwareAcceleration,
+        );
+      })
+      .catch(() => applyAppTheme(null));
+  } else {
+    applyAppTheme(null);
   }
 
   refreshResumeStartupState().catch(() => {});

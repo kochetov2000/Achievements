@@ -51,6 +51,7 @@ const {
   configsDir,
   cacheDir,
 } = require("./utils/paths");
+const { normalizeAppTheme } = require("./utils/app-theme");
 const { ensureSchemaParseRuntimeReady } = require("./utils/steam-schema-parse");
 const { startPlaytimeLogWatcher } = require("./utils/playtime-log-watcher");
 const { parseGpdFile, buildSnapshotFromGpd } = require("./utils/xenia-gpd");
@@ -1076,6 +1077,7 @@ function resolveShadPs4AchievementCacheUserId(
 const DEFAULT_PREFERENCES = {
   startInTray: false,
   screenshotFolder: getDefaultScreenshotFolder(),
+  appTheme: "dracula",
   overlayShortcut: "",
   overlayInteractShortcut: "\\",
   sound: "mute",
@@ -5244,6 +5246,15 @@ function applyPreferenceSideEffects(
       });
     }
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "appTheme")) {
+    const appTheme = normalizeAppTheme(prefsSnapshot.appTheme);
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send("overlay-preferences-updated", {
+        appTheme,
+      });
+    }
+    broadcastToAll("tray:theme-changed", { appTheme });
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "lumaPlayWatcherEnabled")) {
     try {
       watchedFoldersApi?.refreshConfigState?.();
@@ -5326,6 +5337,10 @@ function updatePreferences(patch = {}) {
     } else {
       delete incoming.soundVolume;
     }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(incoming, "appTheme")) {
+    incoming.appTheme = normalizeAppTheme(incoming.appTheme);
   }
 
   if (Object.prototype.hasOwnProperty.call(incoming, "steamApiKey")) {
@@ -9912,12 +9927,13 @@ function createMainWindow(options = {}) {
   });
   const forceShowOnLoad = !!options.forceShow;
   let initialZoom = 1;
+  let initialPreferences = {};
   try {
-    const prefs = fs.existsSync(preferencesPath)
+    initialPreferences = fs.existsSync(preferencesPath)
       ? JSON.parse(fs.readFileSync(preferencesPath, "utf-8"))
       : {};
-    initialZoom = Number(prefs.windowZoomFactor) || 1;
-  } catch { }
+    initialZoom = Number(initialPreferences.windowZoomFactor) || 1;
+  } catch {}
   mainWindowUserZoom = initialZoom;
   const initialScale = getDisplayScaleForBounds();
   const initialZoomFactor = initialZoom / (initialScale || 1);
@@ -9927,6 +9943,9 @@ function createMainWindow(options = {}) {
     height: 1000,
     frame: false,
     show: false,
+    transparent: false,
+    roundedCorners: true,
+    backgroundColor: "#282a36",
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 10, y: 10 },
     webPreferences: {
