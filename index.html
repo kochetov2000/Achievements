@@ -4453,6 +4453,7 @@
           <input
             type="text"
             id="windowsLinuxPrefixInput"
+            placeholder="Example: /path/.prefix (without drive_c folder)"
           />
           <button
             type="button"
@@ -19527,6 +19528,12 @@
             windowsLinuxPrefixLabel.textContent = tUi(
               "boot.onboarding.windowsLinuxPrefix",
               "Wine prefix:",
+            );
+          }
+          if (windowsLinuxPrefixInput) {
+            windowsLinuxPrefixInput.placeholder = tUi(
+              "boot.onboarding.windowsLinuxPrefixInput.placeholder",
+              "Example: /path/.prefix (without drive_c folder)",
             );
           }
           if (bootOnboardingSetPrefixBtn) {
