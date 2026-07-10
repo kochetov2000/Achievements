@@ -2,7 +2,7 @@ appId: com.achievements.app
 productName: Achievements
 copyright: Copyright © 2025 JokerVerse
 artifactName: ${productName}-Setup-${version}.${ext}
-electronVersion: 40.8.3
+electronVersion: 43.1.0
 afterPack: ./build/afterPack.js
 directories:
     output: dist
