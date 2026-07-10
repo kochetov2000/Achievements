@@ -67,8 +67,23 @@ const GAMEPLAY_DB_WAL_NAME = `${GAMEPLAY_DB_NAME}-wal`;
 const GAMEPLAY_DB_SHM_NAME = `${GAMEPLAY_DB_NAME}-shm`;
 
 const watcherLogger = createLogger("watcher");
+function getInvalidAutoAppIdReason(name) {
+  const value = String(name || "").trim();
+  if (!value) return "empty";
+  if (!/^[0-9a-fA-F]+$/.test(value)) return "";
+  if (value.length === 1) return "single-character-id";
+  if (/^0+$/.test(value)) return "zero-only-id";
+  if (/^0{4,}/.test(value)) return "leading-zero-padding";
+  return "";
+}
+
+function isIgnoredAutoAppId(name) {
+  return !!getInvalidAutoAppIdReason(name);
+}
+
 function isAppIdName(name) {
-  return /^[0-9a-fA-F]+$/.test(String(name || ""));
+  const value = String(name || "").trim();
+  return /^[0-9a-fA-F]+$/.test(value) && !isIgnoredAutoAppId(value);
 }
 const STRICT_ROOT_PROFILES = [
   {
@@ -1002,6 +1017,8 @@ module.exports = function makeWatchedFolders({
   function pickExistingSeedTargetForMeta(meta, candidates) {
     const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
     if (!list.length) return "";
+    const isXenia = isXeniaMeta(meta);
+    const appid = String(meta?.appid || "").trim();
 
     let bestTarget = "";
     let bestScore = 0;
@@ -1013,6 +1030,9 @@ module.exports = function makeWatchedFolders({
         continue;
       }
       if (!stat?.isFile?.()) continue;
+      if (isXenia && !isExpectedXeniaGpdFile(meta, appid, candidate)) {
+        continue;
+      }
 
       const score = scoreMetaForPath(meta, candidate);
       if (score > bestScore) {
@@ -2461,26 +2481,37 @@ module.exports = function makeWatchedFolders({
     const userFolders = Array.isArray(prefs.watchedFolders)
       ? prefs.watchedFolders
       : [];
+    const userBlockedFolders = Array.isArray(prefs.blockedWatchedFolders)
+      ? prefs.blockedWatchedFolders
+      : [];
     const blocked = getBlockedFoldersSet();
 
     const seen = new Map();
-    [...watchRoots, ...userFolders].filter(Boolean).forEach((dir) => {
-      const real = normalizePrefPath(dir);
-      if (!real || seen.has(real)) return;
-      const exists = (() => {
-        try {
-          return fs.existsSync(real);
-        } catch {
-          return false;
-        }
-      })();
-      seen.set(real, {
-        path: real,
-        blocked: blocked.has(real),
-        exists,
-        isDefault: watchSet.has(real),
+    [
+      ...watchRoots,
+      ...userFolders,
+      ...userBlockedFolders
+        .map(normalizePrefPath)
+        .filter((dir) => dir && !DEFAULT_BLOCKED_SET.has(dir)),
+    ]
+      .filter(Boolean)
+      .forEach((dir) => {
+        const real = normalizePrefPath(dir);
+        if (!real || seen.has(real)) return;
+        const exists = (() => {
+          try {
+            return fs.existsSync(real);
+          } catch {
+            return false;
+          }
+        })();
+        seen.set(real, {
+          path: real,
+          blocked: blocked.has(real),
+          exists,
+          isDefault: watchSet.has(real),
+        });
       });
-    });
     return Array.from(seen.values());
   }
 
@@ -2760,6 +2791,19 @@ module.exports = function makeWatchedFolders({
 
   function isXeniaMeta(meta) {
     return normalizePlatform(meta?.platform) === "xenia";
+  }
+
+  function getExpectedXeniaGpdBaseName(meta, appid) {
+    const id = String(meta?.appid || appid || "").trim().toLowerCase();
+    return id ? `${id}.gpd` : "";
+  }
+
+  function isExpectedXeniaGpdFile(meta, appid, filePath) {
+    if (!filePath) return false;
+    const base = path.basename(filePath).toLowerCase();
+    if (!base.endsWith(".gpd")) return false;
+    const expected = getExpectedXeniaGpdBaseName(meta, appid);
+    return expected ? base === expected : true;
   }
 
   function isRpcs3Meta(meta) {
@@ -3255,14 +3299,28 @@ module.exports = function makeWatchedFolders({
   function resolveGpdPathForMeta(meta) {
     if (!meta) return "";
     const direct = typeof meta.gpd_path === "string" ? meta.gpd_path : "";
-    if (direct && fs.existsSync(direct)) return direct;
+    const expectedBase = getExpectedXeniaGpdBaseName(meta);
+    if (
+      direct &&
+      fs.existsSync(direct) &&
+      (!expectedBase || path.basename(direct).toLowerCase() === expectedBase)
+    ) {
+      return direct;
+    }
     const base = meta.save_path || "";
     const appid = String(meta.appid || "").trim();
     if (base && appid) {
       const candidate = path.join(base, `${appid}.gpd`);
       if (fs.existsSync(candidate)) return candidate;
+      try {
+        const files = fs.readdirSync(base);
+        const found = files.find(
+          (f) => f.toLowerCase() === `${appid.toLowerCase()}.gpd`,
+        );
+        if (found) return path.join(base, found);
+      } catch {}
     }
-    if (base) {
+    if (base && !appid) {
       try {
         const files = fs.readdirSync(base);
         const found = files.find((f) => f.toLowerCase().endsWith(".gpd"));
@@ -4009,6 +4067,85 @@ module.exports = function makeWatchedFolders({
     }
   }
 
+  const BOOT_WATCHER_PROGRESS_ID = "boot-watchers";
+  let bootWatcherProgressStarted = false;
+  let bootWatcherProgressLastEmitAt = 0;
+
+  function clampBootProgressPercent(value, fallback = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    if (n <= 0) return 0;
+    if (n >= 100) return 100;
+    return Math.round(n);
+  }
+
+  function getBootProgressPercent(current, total, fallback = 0) {
+    const c = Number(current);
+    const t = Number(total);
+    if (!Number.isFinite(c) || !Number.isFinite(t) || t <= 0) {
+      return clampBootProgressPercent(fallback, 0);
+    }
+    return clampBootProgressPercent((Math.max(0, c) / t) * 100, fallback);
+  }
+
+  function getBootProgressItemName(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    try {
+      return path.basename(text) || text;
+    } catch {
+      return text;
+    }
+  }
+
+  function broadcastBootWatcherProgress(channel, patch = {}) {
+    const status =
+      patch.status ||
+      (channel === "generation:progress:end" ? "success" : "running");
+    broadcastAll(channel, {
+      id: BOOT_WATCHER_PROGRESS_ID,
+      kind: "boot-background",
+      scope: "boot",
+      status,
+      phase: "waitingForUi",
+      itemName: "",
+      current: 0,
+      total: 0,
+      percent: 0,
+      ...patch,
+    });
+  }
+
+  function startBootWatcherProgress(patch = {}) {
+    bootWatcherProgressStarted = true;
+    bootWatcherProgressLastEmitAt = Date.now();
+    broadcastBootWatcherProgress("generation:progress:start", patch);
+  }
+
+  function updateBootWatcherProgress(patch = {}, options = {}) {
+    const now = Date.now();
+    if (!bootWatcherProgressStarted) {
+      startBootWatcherProgress(patch);
+      return;
+    }
+    if (options.force !== true && now - bootWatcherProgressLastEmitAt < 500) {
+      return;
+    }
+    bootWatcherProgressLastEmitAt = now;
+    broadcastBootWatcherProgress("generation:progress:update", patch);
+  }
+
+  function finishBootWatcherProgress(status = "success", patch = {}) {
+    if (!bootWatcherProgressStarted) {
+      startBootWatcherProgress(patch);
+    }
+    broadcastBootWatcherProgress("generation:progress:end", {
+      ...patch,
+      status,
+    });
+    bootWatcherProgressStarted = false;
+  }
+
   function waitForMainWindowReady(timeoutMs = 4000) {
     return new Promise((resolve) => {
       let win = global.mainWindow;
@@ -4672,7 +4809,7 @@ module.exports = function makeWatchedFolders({
     if (isLumaPlay) {
       // Registry-backed source; no file suffix checks.
     } else if (isXenia) {
-      if (!base.endsWith(".gpd")) return;
+      if (!isExpectedXeniaGpdFile(meta, appid, filePath)) return;
     } else if (isRpcs3) {
       if (base !== "tropusr.dat") return;
     } else if (isPs4) {
@@ -5393,12 +5530,33 @@ module.exports = function makeWatchedFolders({
   function runInitialSeedForMeta(id, meta, candidates, options = {}) {
     const suppressInitialNotify = options.suppressInitialNotify === true;
     const bornInBoot = options.bornInBoot === true;
+    const xeniaTargetBeforeSeed = isXeniaMeta(meta)
+      ? pickExistingSeedTargetForMeta(meta, candidates)
+      : "";
+    let xeniaCachedBeforeSeed = null;
+    if (xeniaTargetBeforeSeed && typeof getCachedSnapshot === "function") {
+      try {
+        const cached = getCachedSnapshot(
+          meta?.name || id,
+          meta?.platform || null,
+          {
+            appid: id,
+            filePath: xeniaTargetBeforeSeed,
+            savePath: xeniaTargetBeforeSeed || meta?.save_path || null,
+          },
+        );
+        if (cached && typeof cached === "object" && !Array.isArray(cached)) {
+          xeniaCachedBeforeSeed = cached;
+        }
+      } catch {}
+    }
     seedInitialSnapshot(id, meta, candidates, true, {
       suppressInitialNotify,
       bornInBoot,
     });
     if (pendingInitialNotify.has(meta.name)) {
-      const existingTarget = pickExistingSeedTargetForMeta(meta, candidates);
+      const existingTarget =
+        xeniaTargetBeforeSeed || pickExistingSeedTargetForMeta(meta, candidates);
       pendingInitialNotify.delete(meta.name);
       if (existingTarget) {
         const fromUnblock = justUnblocked.has(id);
@@ -5411,10 +5569,24 @@ module.exports = function makeWatchedFolders({
               target: existingTarget,
             });
             const doEval = async (retryFlag = false) => {
+              const isXeniaInitialNotify = isXeniaMeta(preferredMeta);
+              if (isXeniaInitialNotify && xeniaCachedBeforeSeed) {
+                lastSnapshot.set(
+                  makeSnapshotKey(preferredMeta, id, {
+                    filePath: existingTarget,
+                    savePath: existingTarget,
+                  }),
+                  xeniaCachedBeforeSeed,
+                );
+              }
               const evalOpts = {
                 initial: true,
                 retry: retryFlag,
-                forceEmptyPrev: fromUnblock ? false : true,
+                forceEmptyPrev: fromUnblock
+                  ? false
+                  : isXeniaInitialNotify
+                    ? !xeniaCachedBeforeSeed
+                    : true,
                 preserveUnblockAutoSelectSuppression: fromUnblock,
               };
               const result = await evaluateFile(
@@ -5854,6 +6026,9 @@ module.exports = function makeWatchedFolders({
 
     const locateAndPersistSavePath = () => {
       const isXenia = isXeniaMeta(meta);
+      const expectedXeniaGpd = isXenia
+        ? getExpectedXeniaGpdBaseName(meta, appid)
+        : "";
       const names = [
         "achievements.ini",
         "achievements.json",
@@ -5870,7 +6045,10 @@ module.exports = function makeWatchedFolders({
           for (const ent of entries) {
             if (
               ent.isFile() &&
-              ((isXenia && ent.name.toLowerCase().endsWith(".gpd")) ||
+              ((isXenia &&
+                ent.name.toLowerCase().endsWith(".gpd") &&
+                (!expectedXeniaGpd ||
+                  ent.name.toLowerCase() === expectedXeniaGpd)) ||
                 (!isXenia && targetLc.includes(ent.name.toLowerCase())))
             ) {
               return path.join(dir, ent.name);
@@ -5972,6 +6150,8 @@ module.exports = function makeWatchedFolders({
               return;
             }
           }
+        } else if (isXeniaMeta(meta)) {
+          if (!isExpectedXeniaGpdFile(meta, appid, filePath)) return;
         } else if (isGogOfficialMeta(meta)) {
           const normFile = path.normalize(filePath).toLowerCase();
           const resolved = resolveGogOfficialGameplayDbForConfig(meta);
@@ -6794,6 +6974,16 @@ module.exports = function makeWatchedFolders({
   async function generateOneAppId(appid, appDir, opts = {}) {
     appid = String(appid);
     const desiredPlatform = normalizePlatform(opts.forcePlatform) || null;
+    const invalidAutoAppIdReason = getInvalidAutoAppIdReason(appid);
+    if (invalidAutoAppIdReason) {
+      watcherLogger.info("watcher:generate-skipped-invalid-appid", {
+        appid,
+        platform: desiredPlatform || null,
+        path: appDir || null,
+        reason: invalidAutoAppIdReason,
+      });
+      return { created: false, reason: "invalid-appid" };
+    }
     const externalProgressHandler =
       typeof opts.onGenerationProgress === "function"
         ? opts.onGenerationProgress
@@ -7441,6 +7631,9 @@ module.exports = function makeWatchedFolders({
 
     for (const fp of orderedCandidates) {
       if (!fp || !fs.existsSync(fp)) continue;
+      if (isXeniaMeta(meta) && !isExpectedXeniaGpdFile(meta, appid, fp)) {
+        continue;
+      }
       try {
         const cacheSavePathForFp =
           isPs4Meta(meta) && isPs4ProgressXmlPath(fp)
@@ -10147,6 +10340,15 @@ module.exports = function makeWatchedFolders({
         const looksPs4 =
           /^cusa\d+/i.test(base) || base.toLowerCase() === "trophy00";
         const looksRpcs3 = /^npwr\d+/i.test(base);
+        const invalidAutoAppIdReason = getInvalidAutoAppIdReason(base);
+        if (invalidAutoAppIdReason && !looksPs4 && !looksRpcs3) {
+          watcherLogger.info("watcher:addDir-skip-invalid-appid", {
+            appid: String(base),
+            path: dir,
+            reason: invalidAutoAppIdReason,
+          });
+          return;
+        }
         if (!isAppIdName(base) && !looksPs4 && !looksRpcs3) return;
 
         // PS4/RPCS3: let the dedicated scan handle it (avoid generateConfigForAppId, which expects a numeric appid)
@@ -10612,7 +10814,9 @@ module.exports = function makeWatchedFolders({
           folders: getWatchedFolders({ includeMeta: true }),
         };
       }
-      const cur = getWatchedFolders();
+      const cur = getUserWatchedFoldersRaw()
+        .map(normalizePrefPath)
+        .filter(Boolean);
       if (!cur.includes(p)) saveWatchedFolders([...cur, p]);
       startFolderWatcher(p);
       await scanRootOnce(p, {
@@ -10708,6 +10912,12 @@ module.exports = function makeWatchedFolders({
       const blocked = getBlockedFoldersSet();
       blocked.delete(target);
       saveBlockedFolders([...blocked]);
+      const cur = getUserWatchedFoldersRaw()
+        .map(normalizePrefPath)
+        .filter(Boolean);
+      if (target && !cur.includes(target)) {
+        saveWatchedFolders([...cur, target]);
+      }
       await indexExistingConfigsSync();
       startFolderWatcher(target, { initialScan: false });
       await scanRootOnce(target, { suppressInitialNotify: true });
@@ -10834,107 +11044,236 @@ module.exports = function makeWatchedFolders({
 
     // Background boot scan with bounded concurrency.
     (async () => {
-      try {
-        await waitForBootOverlayHiddenBeforeBackgroundScan();
-      } catch { }
-      try {
-        await waitForBootOnboardingGateOpen();
-      } catch { }
-      try {
-        await rebuildKnownAppIds({
-          forceAsyncIndex: true,
-          forceAsyncRootScan: true,
-        });
-      } catch { }
-      const rootsForBootScan = getWatchedFolders();
-      try {
-        if (BOOT_WATCH_FOLDER_DELAY_MS > 0) {
-          await sleep(BOOT_WATCH_FOLDER_DELAY_MS);
-        }
-        await startFolderWatchersBatched(rootsForBootScan, {
-          initialScan: false,
-          batchDelayMs: BOOT_ATTACH_DELAY_MS,
-        });
-        if (ROOT_WATCH_SETTLE_DELAY_MS > 0 && rootsForBootScan.length > 0) {
-          await sleep(ROOT_WATCH_SETTLE_DELAY_MS);
-        }
-      } catch { }
-      try {
-        await flushBootOnboardingDirtyRoots({
-          reason: "boot-scan-gate-open",
-        });
-      } catch { }
-      try {
-        const scanJobs = rootsForBootScan.map((root, index) => ({
-          root,
-          index,
-        }));
-        await runWithConcurrency(scanJobs, 1, async ({ root, index }) => {
-          try {
-            const normalizedRoot = normalizeRoot(root);
-            const strictProfile = getStrictRootProfile(normalizedRoot);
-            if (
-              strictProfile &&
-              BOOT_STRICT_SCAN_STAGGER_BASE_MS > 0 &&
-              BOOT_STRICT_SCAN_STAGGER_SLOTS > 0
-            ) {
-              const offset =
-                (Math.max(0, Number(index) || 0) %
-                  BOOT_STRICT_SCAN_STAGGER_SLOTS) *
-                BOOT_STRICT_SCAN_STAGGER_STEP_MS;
-              const delayMs = BOOT_STRICT_SCAN_STAGGER_BASE_MS + offset;
-              if (delayMs > 0) {
-                await sleep(delayMs);
-              }
-            }
-            await scanRootOnce(root);
-          } catch { }
-        });
-      } catch { }
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
-      }
-      try {
-        await scanLumaPlayRegistryOnce({
-          suppressInitialNotify: true,
-          autoRebuild: false,
-        });
-      } catch (err) {
-        watcherLogger.warn("lumaplay:boot-scan-failed", {
-          error: err?.message || String(err),
-        });
-      }
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
-      }
+      let bootProgressTotal = 8;
+      const emitBootProgress = (patch = {}, options = {}) => {
+        updateBootWatcherProgress(
+          {
+            total: bootProgressTotal,
+            ...patch,
+          },
+          options,
+        );
+      };
 
       try {
-        await rebuildSaveWatchers({
-          deferLumaPlayPolling: true,
+        startBootWatcherProgress({
+          phase: "waitingForUi",
+          current: 0,
+          total: bootProgressTotal,
+          percent: 1,
         });
-      } catch { }
-      try {
-        emitDashboardRefresh();
-      } catch { }
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        try {
+          await waitForBootOverlayHiddenBeforeBackgroundScan();
+        } catch {}
+        try {
+          await waitForBootOnboardingGateOpen();
+        } catch {}
+
+        emitBootProgress(
+          {
+            phase: "indexingConfigs",
+            itemName: "Configs",
+            current: 1,
+            percent: getBootProgressPercent(1, bootProgressTotal, 12),
+          },
+          { force: true },
+        );
+        try {
+          await rebuildKnownAppIds({
+            forceAsyncIndex: true,
+            forceAsyncRootScan: true,
+          });
+        } catch {}
+        const rootsForBootScan = getWatchedFolders();
+        bootProgressTotal = Math.max(7, rootsForBootScan.length + 7);
+
+        emitBootProgress(
+          {
+            phase: "attachingWatchers",
+            itemName: `${rootsForBootScan.length} folders`,
+            current: 2,
+            percent: getBootProgressPercent(2, bootProgressTotal, 18),
+          },
+          { force: true },
+        );
+        try {
+          if (BOOT_WATCH_FOLDER_DELAY_MS > 0) {
+            await sleep(BOOT_WATCH_FOLDER_DELAY_MS);
+          }
+          await startFolderWatchersBatched(rootsForBootScan, {
+            initialScan: false,
+            batchDelayMs: BOOT_ATTACH_DELAY_MS,
+          });
+          if (ROOT_WATCH_SETTLE_DELAY_MS > 0 && rootsForBootScan.length > 0) {
+            await sleep(ROOT_WATCH_SETTLE_DELAY_MS);
+          }
+        } catch {}
+        try {
+          await flushBootOnboardingDirtyRoots({
+            reason: "boot-scan-gate-open",
+          });
+        } catch {}
+        try {
+          const scanJobs = rootsForBootScan.map((root, index) => ({
+            root,
+            index,
+          }));
+          await runWithConcurrency(scanJobs, 1, async ({ root, index }) => {
+            emitBootProgress(
+              {
+                phase: "scanningFolders",
+                itemName: getBootProgressItemName(root),
+                current: Math.min(bootProgressTotal, 3 + index),
+                percent: getBootProgressPercent(
+                  Math.min(bootProgressTotal, 3 + index),
+                  bootProgressTotal,
+                  35,
+                ),
+              },
+              { force: index === 0 || index === rootsForBootScan.length - 1 },
+            );
+            try {
+              const normalizedRoot = normalizeRoot(root);
+              const strictProfile = getStrictRootProfile(normalizedRoot);
+              if (
+                strictProfile &&
+                BOOT_STRICT_SCAN_STAGGER_BASE_MS > 0 &&
+                BOOT_STRICT_SCAN_STAGGER_SLOTS > 0
+              ) {
+                const offset =
+                  (Math.max(0, Number(index) || 0) %
+                    BOOT_STRICT_SCAN_STAGGER_SLOTS) *
+                  BOOT_STRICT_SCAN_STAGGER_STEP_MS;
+                const delayMs = BOOT_STRICT_SCAN_STAGGER_BASE_MS + offset;
+                if (delayMs > 0) {
+                  await sleep(delayMs);
+                }
+              }
+              await scanRootOnce(root);
+            } catch {}
+          });
+        } catch {}
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+
+        const afterFolderScanCurrent = Math.min(
+          bootProgressTotal,
+          rootsForBootScan.length + 3,
+        );
+        emitBootProgress(
+          {
+            phase: "scanningLumaplay",
+            itemName: "LumaPlay",
+            current: afterFolderScanCurrent,
+            percent: getBootProgressPercent(
+              afterFolderScanCurrent,
+              bootProgressTotal,
+              72,
+            ),
+          },
+          { force: true },
+        );
+        try {
+          await scanLumaPlayRegistryOnce({
+            suppressInitialNotify: true,
+            autoRebuild: false,
+          });
+        } catch (err) {
+          watcherLogger.warn("lumaplay:boot-scan-failed", {
+            error: err?.message || String(err),
+          });
+        }
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+
+        const rebuildCurrent = Math.min(
+          bootProgressTotal,
+          rootsForBootScan.length + 4,
+        );
+        emitBootProgress(
+          {
+            phase: "rebuildingWatchers",
+            itemName: "Save watchers",
+            current: rebuildCurrent,
+            percent: getBootProgressPercent(
+              rebuildCurrent,
+              bootProgressTotal,
+              82,
+            ),
+          },
+          { force: true },
+        );
+        try {
+          await rebuildSaveWatchers({
+            deferLumaPlayPolling: true,
+          });
+        } catch {}
+        try {
+          emitDashboardRefresh();
+        } catch {}
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+        bootMode = false;
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+
+        const pollersCurrent = Math.min(
+          bootProgressTotal,
+          rootsForBootScan.length + 5,
+        );
+        emitBootProgress(
+          {
+            phase: "startingPollers",
+            itemName: "Background pollers",
+            current: pollersCurrent,
+            percent: getBootProgressPercent(
+              pollersCurrent,
+              bootProgressTotal,
+              90,
+            ),
+          },
+          { force: true },
+        );
+        startLumaPlayDiscoveryPolling();
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+        try {
+          await runLumaPlayDiscoveryTick({ autoRebuild: true });
+        } catch {}
+        if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
+          await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
+        }
+
+        emitBootProgress(
+          {
+            phase: "finalizing",
+            itemName: "",
+            current: Math.max(0, bootProgressTotal - 1),
+            percent: 96,
+          },
+          { force: true },
+        );
+        scheduleDeferredSeedPumpAfterOverlayGate();
+        finishBootWatcherProgress("success", {
+          phase: "completed",
+          itemName: "",
+          current: bootProgressTotal,
+          total: bootProgressTotal,
+          percent: 100,
+        });
+      } catch (err) {
+        finishBootWatcherProgress("failed", {
+          phase: "failed",
+          detail: err?.message || String(err || "Boot background startup failed"),
+          percent: 0,
+        });
       }
-      bootMode = false;
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
-      }
-      startLumaPlayDiscoveryPolling();
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
-      }
-      try {
-        await runLumaPlayDiscoveryTick({ autoRebuild: true });
-      } catch { }
-      if (BOOT_PHASE_SETTLE_DELAY_MS > 0) {
-        await sleep(BOOT_PHASE_SETTLE_DELAY_MS);
-      }
-      scheduleDeferredSeedPumpAfterOverlayGate();
-    })().catch(() => { });
+    })().catch(() => {});
   });
 
   function maybeEmitBootComplete() {

@@ -2220,6 +2220,43 @@ function createGenerationProgressJob(seed = {}) {
   };
 }
 
+const BOOT_CACHE_PROGRESS_ID = "boot-cache";
+let bootCacheProgressLastEmitAt = 0;
+
+function broadcastBootCacheProgress(channel, patch = {}) {
+  const status =
+    patch.status ||
+    (channel === "generation:progress:end" ? "success" : "running");
+  const payload = normalizeGenerationProgressState(
+    {
+      id: BOOT_CACHE_PROGRESS_ID,
+      kind: "boot-background",
+      scope: "boot",
+      phase: "loadingCache",
+      itemName: "Achievement cache",
+      status,
+      ...patch,
+    },
+    {
+      id: BOOT_CACHE_PROGRESS_ID,
+      kind: "boot-background",
+      scope: "boot",
+      phase: "loadingCache",
+      itemName: "Achievement cache",
+      status,
+    },
+  );
+  broadcastGenerationProgress(channel, payload);
+}
+
+function updateBootCacheProgress(patch = {}, options = {}) {
+  const now = Date.now();
+  const force = options.force === true;
+  if (!force && now - bootCacheProgressLastEmitAt < 700) return;
+  bootCacheProgressLastEmitAt = now;
+  broadcastBootCacheProgress("generation:progress:update", patch);
+}
+
 function mapAchgenUiMessage(message) {
   const raw = String(message || "").trim();
   const msg = raw.replace(/^[\u2705\u2139\u23ed\u23e9\u26a0]\s*/i, "");
@@ -6119,9 +6156,133 @@ async function saveFullScreenShot(gameName, achDisplayName) {
     );
   }
 
-  const buf = await screenshot({ format: "png" }); // full desktop
-  fs.writeFileSync(file, buf);
+  await enqueueScreenshotCaptureTask(() => captureFullScreenShotInWorker(file), {
+    gameName,
+    achievement: achDisplayName,
+  });
   return file;
+}
+
+function killProcessTree(pid) {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      return;
+    }
+    process.kill(pid, "SIGKILL");
+  } catch {}
+}
+
+const screenshotCaptureQueue = [];
+let screenshotCaptureInFlight = false;
+
+function pumpScreenshotCaptureQueue() {
+  if (screenshotCaptureInFlight) return;
+  const next = screenshotCaptureQueue.shift();
+  if (!next) return;
+  screenshotCaptureInFlight = true;
+  notificationLogger.info("notification:screenshot:queue-run", {
+    queuedRemaining: screenshotCaptureQueue.length,
+    gameName: next.meta.gameName || null,
+    achievement: next.meta.achievement || null,
+  });
+  Promise.resolve()
+    .then(() => next.task())
+    .then((result) => next.resolve(result))
+    .catch((error) => next.reject(error))
+    .finally(() => {
+      screenshotCaptureInFlight = false;
+      if (screenshotCaptureQueue.length > 0) {
+        setImmediate(pumpScreenshotCaptureQueue);
+      }
+    });
+}
+
+function enqueueScreenshotCaptureTask(task, meta = {}) {
+  return new Promise((resolve, reject) => {
+    screenshotCaptureQueue.push({
+      task,
+      resolve,
+      reject,
+      meta: meta && typeof meta === "object" ? meta : {},
+    });
+    notificationLogger.info("notification:screenshot:queued", {
+      queued: screenshotCaptureQueue.length,
+      inFlight: screenshotCaptureInFlight,
+      gameName: meta?.gameName || null,
+      achievement: meta?.achievement || null,
+    });
+    pumpScreenshotCaptureQueue();
+  });
+}
+
+function captureFullScreenShotInWorker(outputPath, options = {}) {
+  const timeoutMs = Math.max(
+    1000,
+    Number(options.timeoutMs) ||
+      Number(process.env.ACHIEVEMENTS_SCREENSHOT_TIMEOUT_MS) ||
+      8000,
+  );
+  return new Promise((resolve, reject) => {
+    const script = path.join(__dirname, "utils", "screenshot-capture-worker.js");
+    const payload = JSON.stringify({ outputPath, timeoutMs });
+    const cp = fork(script, [payload], {
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      windowsHide: true,
+    });
+    let settled = false;
+    const stderr = [];
+    let reportedSuccessPath = "";
+    const finish = (err, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) {
+        killProcessTree(cp.pid);
+        reject(err);
+        return;
+      }
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      const err = new Error(`Screenshot capture timed out after ${timeoutMs}ms`);
+      err.code = "capture-timeout";
+      finish(err);
+    }, timeoutMs + 1000);
+
+    cp.stderr?.on("data", (chunk) => {
+      const text = String(chunk || "").trim();
+      if (text) stderr.push(text.slice(0, 1000));
+    });
+    cp.on("message", (message) => {
+      if (!message || typeof message !== "object") return;
+      if (message.ok) {
+        reportedSuccessPath = message.outputPath || outputPath;
+        return;
+      }
+      const err = new Error(message.error || "Screenshot capture failed");
+      err.code = message.code || "capture-failed";
+      finish(err);
+    });
+    cp.on("error", (err) => finish(err));
+    cp.on("exit", (code, signal) => {
+      if (settled) return;
+      if (code === 0 && (reportedSuccessPath || fs.existsSync(outputPath))) {
+        finish(null, reportedSuccessPath || outputPath);
+        return;
+      }
+      const err = new Error(
+        stderr[0] ||
+          `Screenshot worker exited before completing (code=${code}, signal=${signal || ""})`,
+      );
+      err.code = code === null && signal ? "capture-killed" : "capture-failed";
+      finish(err);
+    });
+  });
 }
 
 ipcMain.handle("load-preferences", () => {
@@ -10480,14 +10641,14 @@ ipcMain.on("show-test-notification", (event, options) => {
 
   const notificationData = {
     displayName: tUi(
-      "settings-testNotificationBtn",
+      "main.notify.testAchievementTitle",
       {},
-      "This is a testing achievement notification",
+      "Test Achievement Notification",
     ),
     description: tUi(
-      "settings-testNotificationDescription",
+      "main.notify.testAchievementDescription",
       {},
-      "This is a testing achievement notification for this app",
+      "This is a test achievement notification for this app.",
     ),
     icon: ICON_PNG_PATH, // Use app icon
     icon_gray: ICON_PNG_PATH, // Use app icon
@@ -10531,16 +10692,15 @@ ipcMain.on("show-test-rare-notification", (_event, options = {}) => {
   queueAchievementNotification({
     name: `TEST_RARE_NOTIFICATION_${rarity.tier.toUpperCase()}`,
     displayName: tUi(
-      "settings-testRareNotification",
-      {tier: tierLabel},
-      `${tierLabel} Rare Test`
+      "main.notify.testRareTitle",
+      { tier: tierLabel },
+      "{tier} Rare Test",
     ),
     description: tUi(
-      "settings-testRareNotificationDescription",
-      {tier: tierLabel.toLowerCase(), percent: rarity.percent},
-      `Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`
+      "main.notify.testRareDescription",
+      { tier: tierLabel.toLowerCase(), percent: rarity.percent },
+      "Random {tier} rarity test notification ({percent}%)",
     ),
-    //`Random ${tierLabel.toLowerCase()} rarity test notification (${rarity.percent}%)`,
     icon: ICON_PNG_PATH,
     icon_gray: ICON_PNG_PATH,
     config_path: baseDir,
@@ -11255,19 +11415,28 @@ function processNextNotification() {
       }
       const gameName = selectedConfig || "Unknown Game";
       const achName = notificationData.displayName || "Achievement";
+      notificationLogger.info("notification:screenshot:start", {
+        displayName: achName,
+        config: notificationData.config_path || null,
+      });
       const saved = await saveFullScreenShot(gameName, achName);
-      console.log(
-        tUi("main.log.screenshotSaved", {}, "Screenshot saved:"),
-        saved,
-      );
+      notificationLogger.info("notification:screenshot:success", {
+        displayName: achName,
+        path: saved,
+      });
     } catch (err) {
-      console.warn(
-        tUi(
-          "main.log.screenshotFailed",
-          { error: err.message },
-          `Screenshot failed: ${err.message}`,
-        ),
-      );
+      const code = err?.code || null;
+      const error = err?.message || String(err);
+      const payload = {
+        displayName: notificationData.displayName || "Achievement",
+        code,
+        error,
+      };
+      if (code === "capture-timeout") {
+        notificationLogger.warn("notification:screenshot:timeout", payload);
+      } else {
+        notificationLogger.warn("notification:screenshot:failed", payload);
+      }
     }
   };
 
@@ -17692,7 +17861,7 @@ function createPlaytimeWindow(playData = {}) {
     }
   });
 
-  ipcMain.once("close-playtime-window", () => {
+  const closePlaytimeWindowHandler = () => {
     const next = pendingPlayData;
     if (playtimeWindow && !playtimeWindow.isDestroyed()) {
       playtimeWindow.close();
@@ -17702,11 +17871,16 @@ function createPlaytimeWindow(playData = {}) {
       pendingPlayData = null;
       createPlaytimeWindow(next);
     }
-  });
+  };
+  ipcMain.once("close-playtime-window", closePlaytimeWindowHandler);
 
   const localWindow = playtimeWindow;
   localWindow.on("closed", () => {
     windowLogger.info("create-playtime-window:closed");
+    ipcMain.removeListener(
+      "close-playtime-window",
+      closePlaytimeWindowHandler,
+    );
     if (playtimeWindow === localWindow) {
       playtimeWindow = null;
       playtimeAlreadyClosing = false;
@@ -18554,6 +18728,14 @@ async function seedManualConfigsAtBoot() {
   }
 
   persistenceLogger.info("boot-cache:manual-start", { total: files.length });
+  if (files.length > 0) {
+    broadcastBootCacheProgress("generation:progress:start", {
+      phase: "loadingCache",
+      current: 0,
+      total: files.length,
+      percent: 0,
+    });
+  }
   const runWithConcurrency = async (items, limit, worker) => {
     if (!Array.isArray(items) || items.length === 0) return;
     const max = Math.max(1, Number(limit) || 1);
@@ -18789,7 +18971,43 @@ async function seedManualConfigsAtBoot() {
     }
   };
 
-  await runWithConcurrency(files, BOOT_MANUAL_SEED_CONCURRENCY, processFile);
+  let processedBootCacheFiles = 0;
+  const emitBootCacheSeedProgress = (force = false) => {
+    if (files.length <= 0) return;
+    const current = Math.min(processedBootCacheFiles, files.length);
+    const percent =
+      files.length > 0 ? Math.round((current / files.length) * 100) : 0;
+    updateBootCacheProgress(
+      {
+        phase: "loadingCache",
+        current,
+        total: files.length,
+        percent,
+      },
+      { force },
+    );
+  };
+
+  await runWithConcurrency(
+    files,
+    BOOT_MANUAL_SEED_CONCURRENCY,
+    async (file) => {
+      try {
+        await processFile(file);
+      } finally {
+        processedBootCacheFiles++;
+        emitBootCacheSeedProgress(processedBootCacheFiles >= files.length);
+      }
+    },
+  );
+  if (files.length > 0) {
+    broadcastBootCacheProgress("generation:progress:end", {
+      phase: "completed",
+      current: files.length,
+      total: files.length,
+      percent: 100,
+    });
+  }
   persistenceLogger.info("boot-cache:manual-complete", { total: files.length });
   bootManualSeedRunning = false;
 }
