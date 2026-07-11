@@ -718,6 +718,7 @@
   "boot.onboarding.setPrefix": "Set prefix",
   "boot.onboarding.windowsLinuxPrefix": "Wine Prefix",
   "boot.onboarding.windowsLinuxPrefixInput.placeholder": "Example: /path/.prefix (without drive_c folder)",
+  "boot.onboarding.windowsLinuxPrefix.hint": "Choose or write folder Wine prefix path, when press \"Set prefix\".",
   "alert.onboardingPending": "Boot onboarding is still in progress.",
   "trayMenuResumeStartup": "Resume Startup (Mute all)",
   "notify.bootOnboardingResumeSuccess": "Startup resumed. Auto-config was skipped and discovered folders were muted.",

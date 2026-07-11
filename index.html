@@ -4465,7 +4465,7 @@
           aria-label="Auto-config folder selection"
         ></div>
         <p id="bootOnboardingHint" class="boot-onboarding-hint"></p>
-        <div id="windowsLinuxPrefix" class="input-with-button settings-control">
+        <div id="windowsLinuxPrefix" class="input-with-button settings-control linux-only">
           <label id="windowsLinuxPrefixLabel"
             >Wine prefix:</label
           >
@@ -4482,8 +4482,13 @@
             📂
           </button>
         </div>
+        <div class="linux-only">
+          <p id="bootOnboardingwindowsLinuxPrefixHint" class="linux-only">
+            Choose or write folder Wine prefix path, when press "Set prefix".
+          </p>
+        </div>
         <div id="bootOnboardingActions" class="confirm-actions">
-          <button id="bootOnboardingSetPrefixBtn" type="button">
+          <button id="bootOnboardingSetPrefixBtn" class="linux-only" type="button">
             Set prefix
           </button>
           <button id="bootOnboardingSkipBtn" type="button">
@@ -19426,6 +19431,7 @@
         const windowsLinuxPrefixLabel = 
           document.getElementById("windowsLinuxPrefixLabel");
         const windowsLinuxPrefixInputFolder = document.getElementById("windowsLinuxPrefixInputFolder");
+        const bootOnboardingwindowsLinuxPrefixHint = document.getElementById("bootOnboardingwindowsLinuxPrefixHint");
         const bootOnboardingHint =
           document.getElementById("bootOnboardingHint");
         const bootOnboardingActions = document.getElementById(
@@ -19461,8 +19467,9 @@
 
         const setBootOnboardingModalVisible = (visible, startDiscovery) => {
           if (window.isWindows) {
-            bootOnboardingSetPrefixBtn.remove();
-            windowsLinuxPrefix.remove();
+            for (elem of document.getElementsByClassName("linux-only")){
+              elem.style.display = "none";
+            }
           }
           else if (startDiscovery) {
             bootOnboardingSetPrefixBtn.addEventListener("click", async () => {
@@ -19722,6 +19729,12 @@
               "boot.onboarding.windowsLinuxPrefixInput.placeholder",
               "Example: /path/.prefix (without drive_c folder)",
             );
+          }
+          if (bootOnboardingwindowsLinuxPrefixHint) {
+            bootOnboardingwindowsLinuxPrefixHint.textContent = tUi(
+              "boot.onboarding.windowsLinuxPrefix.hint",
+              "Choose or write folder Wine prefix path, when press \"Set prefix\".",
+            )
           }
           if (bootOnboardingSetPrefixBtn) {
             bootOnboardingSetPrefixBtn.textContent = tUi(

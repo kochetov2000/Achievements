@@ -10597,7 +10597,7 @@ module.exports = function makeWatchedFolders({
   ipcMain.handle("platform:is-windows", async () => {
     return {
       ok: true,
-      is_windows: IS_WINDOWS,
+      is_windows: IS_WINDOWS || process.env["FAKE_WINDOWS_GUI"]=="1",
     };
   });
 
