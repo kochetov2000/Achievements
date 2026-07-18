@@ -3771,22 +3771,22 @@
                         <select id="platformSelect">
                           <option value="auto" selected>Auto</option>
                           <option value="steam">Steam</option>
-                          <option value="steam-official" disabled>
+                          <option id="platformSelectSteam" value="steam-official" disabled>
                             Steam (Official)
                           </option>
                           <option value="uplay">Uplay</option>
-                          <option value="ubisoft-official" disabled>
+                          <option id="platformSelectUbisoft" value="ubisoft-official" disabled>
                             Ubisoft (Official)
                           </option>
-                          <option value="ea-official" disabled>
+                          <option id="platformSelectEA" value="ea-official" disabled>
                             EA (Official)
                           </option>
                           <option value="epic">Epic</option>
-                          <option value="epic-official" disabled>
+                          <option id="platformSelectEpic" value="epic-official" disabled>
                             Epic (Official)
                           </option>
                           <option value="gog">GOG</option>
-                          <option value="gog-official" disabled>
+                          <option id="platformSelectGOG" value="gog-official" disabled>
                             GOG (Official)
                           </option>
                           <option value="xenia" disabled>Xenia</option>
@@ -10749,10 +10749,11 @@
           presetDropdown.innerHTML = "";
 
           const defaultPresetsGroup = document.createElement("optgroup");
-          defaultPresetsGroup.label = "Default Presets";
-
           const userPresetsGroup = document.createElement("optgroup");
-          userPresetsGroup.label = "Users Presets";
+          window.addEventListener("uiPreferencesLoaded", async () => {
+            defaultPresetsGroup.label = tUi("defaultPresetsGroupLabel", "Default Presets");
+            userPresetsGroup.label = tUi("userPresetsGroupLabel", "Users Presets");
+          })
 
           // Check if we have the new structured format or old format
           if (presetsData.isStructured) {
@@ -13610,8 +13611,8 @@
       function updateSettingsDurationLabel() {
         const value = parseFloat(settingsDurationSlider.value);
         if (!Number.isFinite(value) || value <= 0) {
-          settingsDurationValue.textContent = "Auto";
-          settingsDurationValueDisplay.textContent = "Auto";
+          settingsDurationValue.textContent = tUi("settings.durationValue", "Auto");
+          settingsDurationValueDisplay.textContent = tUi("settings.durationValueDisplay", "Auto");;
           settingsDurationSlider.style.background = `linear-gradient(to right, var(--app-accent-2) 0%, var(--app-border-subtle) 0%, var(--app-border-subtle) 100%)`;
           return;
         }
@@ -19467,8 +19468,9 @@
 
         const setBootOnboardingModalVisible = (visible, startDiscovery) => {
           if (window.isWindows) {
-            for (elem of document.getElementsByClassName("linux-only")){
-              elem.style.display = "none";
+            let arr = [...document.getElementsByClassName('linux-only')];
+            for (elem of arr){
+              elem.remove();
             }
           }
           else if (startDiscovery) {
