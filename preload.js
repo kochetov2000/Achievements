@@ -48,6 +48,16 @@ function getNotificationRarityTier(value) {
   return "bronze";
 }
 
+function getExplicitNotificationRarityTier(data = {}) {
+  const value = String(data?.rarityTier || data?.trophyType || "")
+    .trim()
+    .toLowerCase();
+  if (value === "gold" || value === "silver" || value === "bronze") {
+    return value;
+  }
+  return "";
+}
+
 function isLaz0rboxNotificationPreset(data = {}) {
   const presetName = String(data?.preset || "")
     .trim()
@@ -364,10 +374,13 @@ function findMatchingNotificationIcon(iconPath) {
 function applyNotificationRarityBorder(data = {}) {
   clearNotificationRarityBorder();
   const percent = parseNotificationRarityPercent(data?.rarityPct);
-  const tier = getNotificationRarityTier(data?.rarityPct);
+  const tier =
+    getExplicitNotificationRarityTier(data) ||
+    getNotificationRarityTier(data?.rarityPct);
   const showPercentage =
     data?.showRarityPercentage === true && percent !== null;
-  const showBorder = !!tier && data?.isRare === true;
+  const showBorder =
+    !!tier && (data?.isRare === true || !!getExplicitNotificationRarityTier(data));
   if (
     (!showBorder && !showPercentage) ||
     isLaz0rboxNotificationPreset(data)
@@ -476,6 +489,13 @@ contextBridge.exposeInMainWorld("api", {
       return { achievements: {}, error: String(e?.message || e) };
     }
   },
+  setAchievementManualState: async (payload) => {
+    try {
+      return await ipcRenderer.invoke("achievement:manual-state", payload);
+    } catch (e) {
+      return { success: false, error: String(e?.message || e) };
+    }
+  },
   refreshSelectedConfigRarity: async (configName) => {
     try {
       return await ipcRenderer.invoke("rarity:refresh-selected-config", {
@@ -492,6 +512,7 @@ contextBridge.exposeInMainWorld("api", {
 
   // Presets
   loadPresets: () => ipcRenderer.invoke("load-presets"),
+  loadSanPresets: () => ipcRenderer.invoke("load-san-presets"),
 
   // Notification
   showNotification: (data) => ipcRenderer.send("show-notification", data),
@@ -499,6 +520,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.send("show-test-notification", options),
   showTestRareNotification: (options) =>
     ipcRenderer.send("show-test-rare-notification", options),
+  showTestEmulatorNotification: (options) =>
+    ipcRenderer.send("show-test-emulator-notification", options),
   showTestPlatinumNotification: (options) =>
     ipcRenderer.send("show-test-platinum-notification", options),
   showTestProgressNotification: (options) =>
@@ -563,6 +586,8 @@ contextBridge.exposeInMainWorld("api", {
   savePreferences: (prefs) => ipcRenderer.invoke("preferences:update", prefs),
   updatePreferences: (prefs) => ipcRenderer.invoke("preferences:update", prefs),
   loadPreferences: () => ipcRenderer.invoke("load-preferences"),
+  listAppThemes: () => ipcRenderer.invoke("themes:list"),
+  reloadAppThemes: () => ipcRenderer.invoke("themes:reload"),
   listSteamOfficialAccounts: () =>
     ipcRenderer.invoke("steam-official:list-accounts"),
   getEpicOfficialStatus: () => ipcRenderer.invoke("epic-official:status"),
@@ -593,9 +618,10 @@ contextBridge.exposeInMainWorld("api", {
   },
   renameAndSaveConfig: (oldName, config) =>
     ipcRenderer.invoke("renameAndSaveConfig", oldName, config),
-  selectExecutable: () => ipcRenderer.invoke("selectExecutable"),
-  launchExecutable: (exe, args) =>
-    ipcRenderer.invoke("launchExecutable", exe, args),
+  selectExecutable: (currentPath) =>
+    ipcRenderer.invoke("selectExecutable", currentPath),
+  launchExecutable: (exe, args, workingDirectory) =>
+    ipcRenderer.invoke("launchExecutable", exe, args, workingDirectory),
   requestPlatinumManual: (payload) =>
     ipcRenderer.invoke("platinum:manual", payload),
   onAchievementsMissing: (callback) =>
@@ -654,8 +680,16 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("boot:onboarding:apply-selection", { selectedPaths }),
   skipBootOnboarding: () => ipcRenderer.invoke("boot:onboarding:skip-all"),
   getSteamDbCover: (payload) => ipcRenderer.invoke("covers:steamdb", payload),
+  getSteamProductAssetUrls: (payload) =>
+    ipcRenderer.invoke("covers:steam-product-assets", payload),
   getSteamGridDbCover: (payload) =>
     ipcRenderer.invoke("covers:steamgriddb", payload),
+  resolveEpicStoreUrl: (payload) =>
+    ipcRenderer.invoke("epic:store-url", payload),
+  resolveGogStoreUrl: (payload) => ipcRenderer.invoke("gog:store-url", payload),
+  resolvePlayStationStoreUrl: (payload) =>
+    ipcRenderer.invoke("playstation:store-url", payload),
+  openEaApp: (payload) => ipcRenderer.invoke("ea-app:open", payload),
   openExternalUrl: (url) => ipcRenderer.invoke("open-external-url", url),
   trayAction: (action) => ipcRenderer.send("tray:action", action),
   setStartWithWindows: (enabled) =>
@@ -761,10 +795,13 @@ contextBridge.exposeInMainWorld("electron", {
         "delete-config",
         "load-achievements",
         "load-saved-achievements",
+        "achievement:manual-state",
         "load-presets",
         "preferences:update",
         "save-preferences",
         "load-preferences",
+        "themes:list",
+        "themes:reload",
         "steam-official:list-accounts",
         "epic-official:status",
         "epic-official:connect",
