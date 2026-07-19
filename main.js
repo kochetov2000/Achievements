@@ -12046,6 +12046,7 @@ ipcMain.on("show-test-emulator-notification", (_event, options = {}) => {
     ? trophyType.charAt(0).toUpperCase() + trophyType.slice(1)
     : "";
 
+  const tierLabelTranslated = tUi(`rarity${tierLabel}`, tierLabel)
   queueAchievementNotification({
     name: `TEST_${String(platform || "emulator").toUpperCase()}_NOTIFICATION`,
     displayName: tUi(
@@ -12056,7 +12057,7 @@ ipcMain.on("show-test-emulator-notification", (_event, options = {}) => {
     description: trophyType
       ? tUi(
           "main.notify.testEmulatorDescriptionWithTier",
-          { platform: platformLabel, tier: tierLabel },
+          { platform: platformLabel, tier: tierLabelTranslated },
           "{platform} notification test with {tier} trophy border.",
         )
       : tUi(

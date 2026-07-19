@@ -11652,7 +11652,7 @@
 
           const defaultPresetsGroup = document.createElement("optgroup");
           const userPresetsGroup = document.createElement("optgroup");
-          window.addEventListener("uiPreferencesLoaded", async () => {
+          window.addEventListener("uiPreferencesLoaded", () => {
             defaultPresetsGroup.label = tUi("defaultPresetsGroupLabel", "Default Presets");
             userPresetsGroup.label = tUi("userPresetsGroupLabel", "Users Presets");
           })
@@ -12525,8 +12525,8 @@
         const noneOption = document.createElement("option");
         noneOption.value = "";
         noneOption.textContent = cachedSanPresets.length
-          ? "None"
-          : "No SAN presets found";
+          ? tUi("option.sanPreset.none", "None")
+          : tUi("option.sanPreset.notFound", "No SAN presets found");
         select.appendChild(noneOption);
 
         cachedSanPresets.forEach((preset) => {
