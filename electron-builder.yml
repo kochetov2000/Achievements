@@ -35,8 +35,10 @@ extraResources:
       to: icon.ico
     - from: ./icon.png
       to: icon.png
-    - from: ./tools/schema_parse.zip
-      to: tools/schema_parse.zip
+    - from: ./tools/schema_parse_windows.zip
+      to: tools/schema_parse_windows.zip
+    - from: ./tools/schema_parse_linux.tar.gz
+      to: tools/schema_parse_linux.tar.gz
     - from: ./node_modules/playwright-core/.local-browsers
       to: playwright-browsers
 

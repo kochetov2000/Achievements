@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
 const logger = createLogger("schema-parse");
 const TOP_OWNERS_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const SCHEMA_PARSE_DIRNAME = "schema_parse";
-const SCHEMA_PARSE_ARCHIVE_NAME = "schema_parse.zip";
+const SCHEMA_PARSE_ARCHIVE_NAME = process.platform === "win32" ? "schema_parse_windows.zip" : "schema_parse_linux.tar.gz";
 const SCHEMA_PARSE_STATE_FILENAME = ".seed-state.json";
 const SCHEMA_PARSE_DEFAULT_USERNAME = "goldie_0003";
 const SCHEMA_PARSE_DEFAULT_PASSWORD = "BabaYaga0003";
@@ -26,6 +26,7 @@ const SCHEMA_PARSE_MUTABLE_NAMES = [
   "top_owners_ids.txt",
   "_OUTPUT",
 ];
+const generate_emu_config = process.platform === "win32" ? "generate_emu_config.exe" : "generate_emu_config";
 
 function normalizeUserDataDir(userDataDir = "") {
   return path.resolve(String(userDataDir || process.cwd()).trim());
@@ -161,26 +162,51 @@ function restoreRuntimeMutableEntries(preserveRoot, runtimeDir) {
 async function extractSchemaParseArchive(archivePath, runtimeDir) {
   const archiveLiteral = String(path.resolve(archivePath)).replace(/'/g, "''");
   const runtimeLiteral = String(path.resolve(runtimeDir)).replace(/'/g, "''");
-  const command =
-    `$archive = '${archiveLiteral}'; ` +
-    `$dest = '${runtimeLiteral}'; ` +
-    "New-Item -ItemType Directory -Path $dest -Force | Out-Null; " +
-    "Expand-Archive -LiteralPath $archive -DestinationPath $dest -Force";
-  await execFileAsync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      command,
-    ],
-    {
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-    },
-  );
+  if (process.platform === "win32") {
+    const command =
+      `$archive = '${archiveLiteral}'; ` +
+      `$dest = '${runtimeLiteral}'; ` +
+      "New-Item -ItemType Directory -Path $dest -Force | Out-Null; " +
+      "Expand-Archive -LiteralPath $archive -DestinationPath $dest -Force";
+    await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        command,
+      ],
+      {
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+  }
+  else {
+    await execFileAsync(
+      "mkdir", 
+      [
+        "-p", 
+        runtimeLiteral,
+      ], 
+      {
+        windowsHide: true,
+      }
+    );
+    await execFileAsync(
+      "tar", 
+      [
+        "-xf", 
+        archiveLiteral, 
+        "-C", 
+        runtimeLiteral,
+      ], {
+        windowsHide: true,
+      }
+    );
+  }
 }
 
 function statMtimeMs(filePath = "") {
@@ -289,7 +315,7 @@ async function ensureSchemaParseRuntimeReady(options = {}) {
 
   ensureSchemaParseProcessEnv();
 
-  const runtimeExe = path.join(runtimeDir, "generate_emu_config.exe");
+  const runtimeExe = path.join(runtimeDir, generate_emu_config);
   const runtimeStatePath = resolveSchemaParseStatePath(runtimeDir);
   const bundledHash = computeFileHash(seedArchive);
   const previousState = readJsonFile(runtimeStatePath) || {};
@@ -377,7 +403,7 @@ async function ensureSchemaParseRuntimeReady(options = {}) {
 }
 
 async function runGenerateEmuConfig(runtimeDir, appid) {
-  const exePath = path.join(runtimeDir, "generate_emu_config.exe");
+  const exePath = path.join(runtimeDir, generate_emu_config);
   const outputRoot = path.join(runtimeDir, "_OUTPUT");
   const appOutputDir = path.join(outputRoot, String(appid));
   try {
@@ -388,7 +414,7 @@ async function runGenerateEmuConfig(runtimeDir, appid) {
   try {
     result = await execFileAsync(exePath, [String(appid)], {
       cwd: runtimeDir,
-      windowsHide: true,
+      windowsHide: false,
       maxBuffer: 8 * 1024 * 1024,
       env: applySchemaParseEnvironment(process.env),
     });
@@ -475,7 +501,8 @@ async function executeSchemaParseSingle(runtimeDir, appid, outDir) {
 }
 
 async function runGenerateEmuConfigBatch(runtimeDir, appids = [], options = {}) {
-  const exePath = path.join(runtimeDir, "generate_emu_config.exe");
+  const exePath = path.join(runtimeDir, generate_emu_config);
+  console.log("appids" + appids);
   const normalizedAppIds = Array.from(
     new Set(
       (Array.isArray(appids) ? appids : [])
@@ -483,6 +510,7 @@ async function runGenerateEmuConfigBatch(runtimeDir, appids = [], options = {}) 
         .filter((appid) => /^\d+$/.test(appid)),
     ),
   );
+  console.log("normalizedAppIds" + normalizedAppIds);
   const outputRoot = path.join(runtimeDir, "_OUTPUT");
   for (const appid of normalizedAppIds) {
     try {
@@ -496,10 +524,11 @@ async function runGenerateEmuConfigBatch(runtimeDir, appids = [], options = {}) 
   const result = await new Promise((resolve, reject) => {
     const cp = spawn(exePath, normalizedAppIds, {
       cwd: runtimeDir,
-      windowsHide: true,
+      windowsHide: false,
       env: applySchemaParseEnvironment(process.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    console.log("process.env" + process.env)
     let stdout = "";
     let stdoutLineBuffer = "";
     let stderr = "";
@@ -531,6 +560,7 @@ async function runGenerateEmuConfigBatch(runtimeDir, appids = [], options = {}) 
       "Generating local Steam schema",
       4,
     );
+    console.log("normalizedAppIds after emitBatchProgress" + normalizedAppIds)
     const pollTimer = setInterval(() => {
       if (sawStartedStdout) return;
       let completed = 0;
@@ -579,6 +609,7 @@ async function runGenerateEmuConfigBatch(runtimeDir, appids = [], options = {}) 
         const appid = String(startedMatch[1] || "").trim();
         const index = indexByAppId.get(appid);
         if (index === undefined) continue;
+        console.log("appids" + appids)
         emitBatchProgress(
           appid,
           index + 1,

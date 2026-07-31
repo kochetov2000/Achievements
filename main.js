@@ -11734,11 +11734,19 @@ function createTray() {
     });
   }
   else {
+    //let visible = global.bootOnboardingRequired
     const contextMenu = Menu.buildFromTemplate([
       {
         label: tUi('trayMenuShow', "Show"),
         click: () => {
           showMainWindowRespectingPrefs();
+        },
+      },
+      {
+        label: tUi('trayMenuResumeStartup', "Resume Startup (Mute all)"),
+        visible: global.bootOnboardingRequired,
+        click: () => {
+          resumeStartupFromTray();
         },
       },
       {
@@ -11750,7 +11758,7 @@ function createTray() {
       { type: 'separator' },
       {
         click: () => {
-          exitFromTray = true;
+          //exitFromTray = true;
           app.quit();
         },
         label: tUi('trayMenuQuit', "Quit"),
@@ -11762,7 +11770,6 @@ function createTray() {
 }
 
 let achievementsFilePath; // achievements.json path
-let currentConfigPath;
 let previousAchievements = {};
 const pendingMissingAchievementFiles = new Map();
 
