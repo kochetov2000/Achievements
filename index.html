@@ -11835,10 +11835,11 @@
         presetDropdown.innerHTML = "";
 
         const defaultPresetsGroup = document.createElement("optgroup");
-        defaultPresetsGroup.label = "Default Presets";
-
         const userPresetsGroup = document.createElement("optgroup");
-        userPresetsGroup.label = "Users Presets";
+          window.addEventListener("uiPreferencesLoaded", () => {
+            defaultPresetsGroup.label = tUi("defaultPresetsGroupLabel", "Default Presets");
+            userPresetsGroup.label = tUi("userPresetsGroupLabel", "Users Presets");
+          })
 
         // Check if we have the new structured format or old format
         if (presetsData?.isStructured) {
