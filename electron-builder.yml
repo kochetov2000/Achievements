@@ -3,7 +3,7 @@ productName: Achievements
 copyright: Copyright © 2025 JokerVerse
 npmRebuild: false
 artifactName: ${productName}-Setup-${version}.${ext}
-electronVersion: 43.1.1
+electronVersion: 43.2.0
 afterPack: ./build/afterPack.js
 directories:
     output: dist
@@ -45,6 +45,7 @@ extraResources:
 asarUnpack:
     - 'utils/**'
     - 'utils/pslist-wrapper.mjs'
+    - '**/node_modules/@vscode/windows-process-tree/**'
     - '**/node_modules/screenshot-desktop/**'
     - '**/node_modules/playwright/**'
     - '**/node_modules/playwright-core/**'
