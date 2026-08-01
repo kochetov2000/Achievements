@@ -9,6 +9,7 @@ const {
   Tray,
   shell,
   Menu,
+  Notification,
 } = require("electron");
 // Polyfill File for environments where undici expects it (Electron main may lack global File)
 if (typeof globalThis.File === "undefined") {
@@ -26,6 +27,9 @@ if (typeof globalThis.File === "undefined") {
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-hid-blocklist");
 app.setName("Achievements");
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.achievements.app");
+}
 const {
   spawn,
   fork,
@@ -45,6 +49,9 @@ const CRC32 = require("crc-32");
 const AdmZip = require("adm-zip");
 const { copyFolderOnce, copyFolderOverwrite } = require("./utils/fileCopy");
 const { computeFolderContentVersion } = require("./utils/content-version");
+const {
+  validateAppIdDirectoryTarget,
+} = require("./utils/config-deletion-paths");
 const {
   defaultSoundsFolder,
   defaultPresetsFolder,
@@ -6200,13 +6207,15 @@ function applyPreferenceSideEffects(
   ) {
     const processWatcherEnabled = isProcessNameWatcherEnabled(prefsSnapshot);
     try {
-      processPoller.setEnabled(processWatcherEnabled);
-    } catch { }
+
+      processPoller.setEnabled(true);
+      processPoller.setEventWatcherEnabled(processWatcherEnabled);
+    } catch {}
     if (!processWatcherEnabled) {
-      stopAutoSelectProcessPoller();
-      appLogger.info("process-poller:disabled-by-preferences");
+      appLogger.info("process-poller:fallback-enabled-by-preferences");
+      scheduleAutoSelectProcessPollerAfterBoot();
     } else {
-      appLogger.info("process-poller:enabled-by-preferences");
+      appLogger.info("process-poller:native-enabled-by-preferences");
       scheduleAutoSelectProcessPollerAfterBoot();
     }
   }
@@ -10432,6 +10441,51 @@ ipcMain.handle(
   },
 );
 
+function collectConfigSaveDeletionDirectories({
+  appid,
+  platform,
+  savePath,
+  configData,
+}) {
+  const appidStr = String(appid || "").trim();
+  if (!appidStr) return [];
+  const targets = new Set();
+  const addTarget = (candidate) => {
+    const validated = validateAppIdDirectoryTarget(candidate, appidStr);
+    if (validated) targets.add(validated);
+  };
+  const saveBase = typeof savePath === "string" ? savePath.trim() : "";
+
+  if (saveBase && path.isAbsolute(saveBase)) {
+    const baseLower = saveBase.toLowerCase();
+    const appLower = appidStr.toLowerCase();
+    addTarget(path.join(saveBase, appidStr));
+    if (!baseLower.endsWith(`${path.sep}steam_settings`)) {
+      addTarget(path.join(saveBase, "steam_settings", appidStr));
+    }
+    if (!baseLower.endsWith(`${path.sep}remote`)) {
+      addTarget(path.join(saveBase, "remote", appidStr));
+    }
+    addTarget(path.join(saveBase, normalizePlatform(platform), appidStr));
+    if (path.basename(baseLower) === appLower) addTarget(saveBase);
+  }
+
+  if (platform === "rpcs3") {
+    const trophyDir = resolveRpcs3TrophyDirForConfig(configData || {});
+    addTarget(trophyDir);
+  } else if (platform === "shadps4") {
+    const trophyDir =
+      typeof configData?.trophy_path === "string" && configData.trophy_path
+        ? configData.trophy_path
+        : saveBase;
+    if (trophyDir && path.isAbsolute(trophyDir)) {
+      addTarget(path.dirname(path.dirname(trophyDir)));
+    }
+  }
+
+  return Array.from(targets);
+}
+
 // Handler for config deletion
 ipcMain.handle("delete-config", async (_event, payload) => {
   const configName =
@@ -10457,6 +10511,36 @@ ipcMain.handle("delete-config", async (_event, payload) => {
       ...(meta && typeof meta === "object" ? meta : {}),
     });
     logDeleteWarn(message, meta);
+  };
+  let deletionGuardToken = null;
+  let saveDeletionTargets = [];
+  let configFileDeleted = false;
+  let configStateRefreshAttempted = false;
+  const refreshDeletedConfigState = async () => {
+    if (
+      !configFileDeleted ||
+      configStateRefreshAttempted ||
+      !watchedFoldersApi?.refreshConfigState
+    ) {
+      return;
+    }
+    configStateRefreshAttempted = true;
+    logDeleteInfo("delete-config:refresh-config-state:start", {
+      configName,
+    });
+    try {
+      await watchedFoldersApi.refreshConfigState({
+        suppressInitialNotify: true,
+      });
+      logDeleteInfo("delete-config:refresh-config-state:complete", {
+        configName,
+      });
+    } catch (error) {
+      pushDeleteWarning("delete-config:refresh-config-state-failed", {
+        configName,
+        error: error?.message || String(error),
+      });
+    }
   };
   const isRetryableDeleteError = (err) => {
     const code = String(err?.code || "").toUpperCase();
@@ -10494,35 +10578,69 @@ ipcMain.handle("delete-config", async (_event, payload) => {
     const configPath = path.join(configsDir, `${safeName}.json`);
     //const configPath = path.join(process.env.APPDATA, 'Achievements', 'configs', `${safe}.json`);
     if (fs.existsSync(configPath)) {
-      const needsConfigData = deleteExtras || deleteSaveFiles;
       let configData = null;
-      if (needsConfigData) {
-        try {
-          configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        } catch (err) {
-          pushDeleteWarning("delete-config:parse-failed", {
-            configName,
-            error: err?.message || String(err),
-          });
-        }
+      try {
+        configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      } catch (err) {
+        pushDeleteWarning("delete-config:parse-failed", {
+          configName,
+          error: err?.message || String(err),
+        });
       }
-      const appid = needsConfigData
-        ? sanitizeAppId(configData?.appid) ||
+      const appid =
+        sanitizeAppId(configData?.appid) ||
         sanitizeAppId(configData?.appId) ||
         sanitizeAppId(configData?.steamAppId) ||
-        ""
-        : "";
-      const inferredConfigPlatform = needsConfigData
-        ? inferOfficialPlatformFromMarkers(configData) ||
-        normalizePlatform(configData?.platform)
-        : "";
-      const platform = needsConfigData
-        ? inferredConfigPlatform || getPlatformForAppId(appid) || "steam"
-        : "steam";
+        "";
+      const inferredConfigPlatform =
+        inferOfficialPlatformFromMarkers(configData) ||
+        normalizePlatform(configData?.platform);
+      const platform =
+        inferredConfigPlatform || getPlatformForAppId(appid) || "steam";
       const savePath =
-        needsConfigData && typeof configData?.save_path === "string"
+        typeof configData?.save_path === "string"
           ? configData.save_path
           : "";
+      const skipSaveDirectoryDeletion = [
+        "steam-official",
+        "epic-official",
+        "gog-official",
+        "ubisoft-official",
+        "ea-official",
+        "xbox-pc",
+      ].includes(platform);
+      if (deleteSaveFiles && !skipSaveDirectoryDeletion) {
+        saveDeletionTargets = collectConfigSaveDeletionDirectories({
+          appid,
+          platform,
+          savePath,
+          configData,
+        });
+      }
+
+      if (appid && watchedFoldersApi?.beginConfigDeletion) {
+        logDeleteInfo("delete-config:generation-guard:start", {
+          configName,
+          appid,
+          platform,
+        });
+        deletionGuardToken = await watchedFoldersApi.beginConfigDeletion({
+          appid,
+          configName: safeName,
+          platform,
+          savePath,
+          deleteTargets: saveDeletionTargets,
+          timeoutMs: 60000,
+        });
+        if (Array.isArray(deletionGuardToken?.deleteTargets)) {
+          saveDeletionTargets = deletionGuardToken.deleteTargets;
+        }
+        logDeleteInfo("delete-config:generation-guard:ready", {
+          configName,
+          appid,
+          platform,
+        });
+      }
 
       const deletingActiveConfig =
         sanitizeConfigName(selectedConfig || "") === safeName;
@@ -10543,17 +10661,8 @@ ipcMain.handle("delete-config", async (_event, payload) => {
       await runDeleteWithRetries("config-file", configPath, () =>
         fs.unlinkSync(configPath),
       );
+      configFileDeleted = true;
       clearPendingMissingAchievementFile(configName);
-
-      if (watchedFoldersApi?.refreshConfigState) {
-        logDeleteInfo("delete-config:refresh-config-state:start", {
-          configName,
-        });
-        await watchedFoldersApi.refreshConfigState();
-        logDeleteInfo("delete-config:refresh-config-state:complete", {
-          configName,
-        });
-      }
 
       if (deleteExtras) {
         try {
@@ -10627,14 +10736,7 @@ ipcMain.handle("delete-config", async (_event, payload) => {
         }
       }
       if (deleteSaveFiles) {
-        if (
-          platform === "steam-official" ||
-          platform === "epic-official" ||
-          platform === "gog-official" ||
-          platform === "ubisoft-official" ||
-          platform === "ea-official" ||
-          platform === "xbox-pc"
-        ) {
+        if (skipSaveDirectoryDeletion) {
           logDeleteInfo("delete-config:save-delete-skip", {
             configName,
             platform,
@@ -10702,45 +10804,7 @@ ipcMain.handle("delete-config", async (_event, payload) => {
 
           const appidStr = String(appid || "").trim();
           const saveBase = savePath || "";
-          const appidDirs = new Set();
-          const addDir = (dir) => {
-            if (dir && typeof dir === "string") appidDirs.add(dir);
-          };
-
-          if (appidStr && saveBase) {
-            const baseLower = saveBase.toLowerCase();
-            const appLower = appidStr.toLowerCase();
-            addDir(path.join(saveBase, appidStr));
-            if (!baseLower.endsWith(`${path.sep}steam_settings`)) {
-              addDir(path.join(saveBase, "steam_settings", appidStr));
-            }
-            if (!baseLower.endsWith(`${path.sep}remote`)) {
-              addDir(path.join(saveBase, "remote", appidStr));
-            }
-            addDir(path.join(saveBase, normalizePlatform(platform), appidStr));
-            if (path.basename(baseLower) === appLower) addDir(saveBase);
-          }
-
-          if (platform === "rpcs3") {
-            const trophyDir = resolveRpcs3TrophyDirForConfig(configData || {});
-            if (trophyDir) {
-              const base = path.basename(trophyDir).toLowerCase();
-              if (appidStr && base === appidStr.toLowerCase()) {
-                addDir(trophyDir);
-              }
-            }
-          } else if (platform === "shadps4") {
-            const trophyDir =
-              typeof configData?.trophy_path === "string" &&
-                configData.trophy_path
-                ? configData.trophy_path
-                : saveBase;
-            if (trophyDir) {
-              const appDir = path.dirname(path.dirname(trophyDir));
-              const base = path.basename(appDir || "").toLowerCase();
-              if (appidStr && base === appidStr.toLowerCase()) addDir(appDir);
-            }
-          }
+          const appidDirs = new Set(saveDeletionTargets);
 
           let deletedDir = false;
           for (const dir of appidDirs) {
@@ -10779,6 +10843,7 @@ ipcMain.handle("delete-config", async (_event, payload) => {
           }
         }
       }
+      await refreshDeletedConfigState();
       logDeleteInfo("delete-config:success", {
         configName,
         configPath,
@@ -10797,6 +10862,26 @@ ipcMain.handle("delete-config", async (_event, payload) => {
       error: error.message,
     });
     return { success: false, error: error.message };
+  } finally {
+    await refreshDeletedConfigState();
+    if (deletionGuardToken && watchedFoldersApi?.endConfigDeletion) {
+      try {
+        await watchedFoldersApi.endConfigDeletion(deletionGuardToken, {
+          settleMs: 800,
+          timeoutMs: 60000,
+        });
+        logDeleteInfo("delete-config:generation-guard:released", {
+          configName,
+          appid: deletionGuardToken.appid || null,
+        });
+      } catch (error) {
+        logDeleteWarn("delete-config:generation-guard-release-failed", {
+          configName,
+          appid: deletionGuardToken.appid || null,
+          error: error?.message || String(error),
+        });
+      }
+    }
   }
 });
 
@@ -12647,7 +12732,15 @@ function handlePlatinumComplete({
 }
 
 ipcMain.handle("load-presets", async () => {
-  if (!fs.existsSync(userPresetsFolder)) return [];
+  if (!fs.existsSync(userPresetsFolder)) {
+    return {
+      defaultPresets: [NATIVE_WINDOWS_PRESET_NAME],
+      userPresets: [],
+      scalable: [NATIVE_WINDOWS_PRESET_NAME],
+      nonScalable: [],
+      isStructured: true,
+    };
+  }
 
   try {
     const defaultPresetRoots = getPresetCategoryRoots(
@@ -12686,6 +12779,13 @@ ipcMain.handle("load-presets", async () => {
     });
 
     if (defaultPresets.length || userPresets.length) {
+      if (
+        !defaultPresets.some((preset) =>
+          isNativeWindowsNotificationPreset(preset),
+        )
+      ) {
+        defaultPresets.push(NATIVE_WINDOWS_PRESET_NAME);
+      }
       return {
         defaultPresets,
         userPresets,
@@ -12708,6 +12808,11 @@ ipcMain.handle("load-presets", async () => {
         dir !== PRESET_FOLDER_USERS_LEGACY,
     );
 
+    if (
+      !flatDirs.some((preset) => isNativeWindowsNotificationPreset(preset))
+    ) {
+      flatDirs.push(NATIVE_WINDOWS_PRESET_NAME);
+    }
     return flatDirs;
   } catch (error) {
     notifyError(
@@ -12727,6 +12832,15 @@ let platinumFallbackTimer = null;
 const pendingNotificationScreenshots = new Map();
 const RECENT_ACHIEVEMENT_NOTIFICATION_DEDUPE_MS = 1500;
 const recentAchievementNotificationKeys = new Map();
+const NATIVE_WINDOWS_PRESET_NAME = "Native Windows";
+
+function isNativeWindowsNotificationPreset(preset) {
+  return (
+    String(preset || "")
+      .trim()
+      .toLowerCase() === NATIVE_WINDOWS_PRESET_NAME.toLowerCase()
+  );
+}
 
 function pruneRecentAchievementNotificationKeys(now = Date.now()) {
   for (const [key, timestamp] of recentAchievementNotificationKeys) {
@@ -13048,6 +13162,8 @@ function queueAchievementNotification(achievement) {
   const useSanPreset =
     (achievement.useSanPreset === true || prefs.useSanPreset === true) &&
     sanPresetCandidate;
+  const usesNativeWindowsPreset =
+    isNativeWindowsNotificationPreset(resolvedPreset);
   const resolvedSkipScreenshot =
     achievement.skipScreenshot === true
       ? true
@@ -13072,8 +13188,8 @@ function queueAchievementNotification(achievement) {
     preset: resolvedPreset,
     position: resolvedPosition,
     sound: requestedSound,
-    sanPreset: useSanPreset ? sanPresetCandidate : "",
-    useSanPreset: !!useSanPreset,
+    sanPreset: !usesNativeWindowsPreset && useSanPreset ? sanPresetCandidate : "",
+    useSanPreset: !usesNativeWindowsPreset && !!useSanPreset,
     scale: parseFloat(achievement.scale || 1),
     skipScreenshot: resolvedSkipScreenshot,
     isPlatinum,
@@ -13164,11 +13280,289 @@ function resolveGameCoverHeaderPathForNotification(
   return useFallbackImage ? getNotificationFallbackHeaderPath() : "";
 }
 
+async function captureAchievementUnlockScreenshot(notificationData = {}) {
+  try {
+    if (!screenshot) {
+      console.warn(
+        tUi(
+          "main.log.screenshotDesktopMissing",
+          {},
+          "screenshot-desktop not installed",
+        ),
+      );
+      return;
+    }
+    const gameName =
+      selectedConfig || notificationData.configName || "Unknown Game";
+    const achName = notificationData.displayName || "Achievement";
+    notificationLogger.info("notification:screenshot:start", {
+      displayName: achName,
+      config: notificationData.config_path || null,
+    });
+    const saved = await saveFullScreenShot(gameName, achName);
+    notificationLogger.info("notification:screenshot:success", {
+      displayName: achName,
+      path: saved,
+    });
+  } catch (err) {
+    const code = err?.code || null;
+    const error = err?.message || String(err);
+    const payload = {
+      displayName: notificationData.displayName || "Achievement",
+      code,
+      error,
+    };
+    if (code === "capture-timeout") {
+      notificationLogger.warn("notification:screenshot:timeout", payload);
+    } else {
+      notificationLogger.warn("notification:screenshot:failed", payload);
+    }
+  }
+}
+
+const activeNativeAchievementNotifications = new Set();
+const NATIVE_WINDOWS_REFERENCE_TIMEOUT_MS = 30000;
+const NATIVE_WINDOWS_QUEUE_INTERVAL_MS = 1250;
+const NATIVE_WINDOWS_SHOW_WATCHDOG_MS = 3000;
+
+function buildNativeWindowsNotificationGroupId(notificationData = {}) {
+  const source =
+    notificationData.config_path ||
+    notificationData.configName ||
+    notificationData.appid ||
+    "achievements";
+  return crypto
+    .createHash("sha256")
+    .update(String(source))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function formatNativeWindowsNotificationRarity(notificationData = {}) {
+  if (
+    notificationData.showRarityPercentage !== true ||
+    notificationData.isPlatinum === true
+  ) {
+    return "";
+  }
+  const rarityPct = normalizeNotificationRarityPercent(
+    notificationData.rarityPct,
+  );
+  if (rarityPct === null) return "";
+  const formatted = Number(rarityPct.toFixed(2)).toString();
+  const label = tUi("overlay.rarityLabel", {}, "Rarity");
+  return `${label}: ${formatted}%`;
+}
+
+function invokeNativeWindowsNotificationCallback(callback, ...args) {
+  if (typeof callback !== "function") return;
+  try {
+    callback(...args);
+  } catch (error) {
+    notificationLogger.warn("native-windows-notification:callback-failed", {
+      error: error?.message || String(error),
+    });
+  }
+}
+
+function showNativeWindowsAchievementNotification(
+  notificationData = {},
+  callbacks = {},
+) {
+  if (
+    process.platform !== "win32" ||
+    !Notification ||
+    typeof Notification.isSupported !== "function" ||
+    !Notification.isSupported()
+  ) {
+    notificationLogger.warn("native-windows-notification:unsupported", {
+      platform: process.platform,
+    });
+    return null;
+  }
+
+  const iconPath =
+    notificationData.iconPath && fs.existsSync(notificationData.iconPath)
+      ? notificationData.iconPath
+      : ICON_PATH;
+  const title = notificationData.displayName || "Achievement";
+  const body = [
+    notificationData.description || notificationData.configName || "",
+    formatNativeWindowsNotificationRarity(notificationData),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const groupId = buildNativeWindowsNotificationGroupId(notificationData);
+
+  let nativeNotification = null;
+  let referenceTimer = null;
+  let referenceReleased = false;
+  const releaseReference = () => {
+    if (referenceReleased) return;
+    referenceReleased = true;
+    if (referenceTimer) {
+      clearTimeout(referenceTimer);
+      referenceTimer = null;
+    }
+    if (nativeNotification) {
+      activeNativeAchievementNotifications.delete(nativeNotification);
+    }
+  };
+
+  try {
+    nativeNotification = new Notification({
+      id: crypto
+        .createHash("sha1")
+        .update(
+          [
+            notificationData.config_path || "",
+            notificationData.name || "",
+            notificationData.displayName || "",
+            Date.now(),
+          ].join("::"),
+        )
+        .digest("hex"),
+      groupId,
+      groupTitle: notificationData.configName || "Achievements",
+      title,
+      body,
+      icon: iconPath,
+      silent: true,
+      timeoutType: "default",
+      urgency: "normal",
+    });
+
+    activeNativeAchievementNotifications.add(nativeNotification);
+    referenceTimer = setTimeout(() => {
+      releaseReference();
+    }, NATIVE_WINDOWS_REFERENCE_TIMEOUT_MS);
+    referenceTimer.unref?.();
+
+    nativeNotification.once("show", () => {
+      releaseReference();
+      notificationLogger.info("native-windows-notification:show", {
+        displayName: notificationData.displayName,
+        config: notificationData.config_path || null,
+        groupId,
+      });
+      invokeNativeWindowsNotificationCallback(callbacks.onShow);
+    });
+    nativeNotification.once("failed", (_event, error) => {
+      releaseReference();
+      notificationLogger.warn("native-windows-notification:failed", {
+        displayName: notificationData.displayName,
+        error: error || null,
+      });
+      invokeNativeWindowsNotificationCallback(callbacks.onFailed, error);
+    });
+    nativeNotification.once("close", (details) => {
+      releaseReference();
+      const reason = details?.reason || null;
+      notificationLogger.info("native-windows-notification:closed", {
+        displayName: notificationData.displayName,
+        reason,
+      });
+      invokeNativeWindowsNotificationCallback(callbacks.onClose, reason);
+    });
+    nativeNotification.show();
+    return nativeNotification;
+  } catch (error) {
+    releaseReference();
+    notificationLogger.warn("native-windows-notification:show-failed", {
+      displayName: notificationData.displayName,
+      error: error?.message || String(error),
+    });
+    return null;
+  }
+}
+
+function playAchievementNotificationSound(achievement = {}) {
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    achievement.sound &&
+    achievement.sound !== "mute"
+  ) {
+    mainWindow.webContents.send("play-sound", achievement.sound);
+  }
+}
+
+function showCustomAchievementNotification({
+  achievement,
+  notificationData,
+  duration,
+  shouldScreenshot,
+  playSound = true,
+  onFinished,
+}) {
+  let notificationWindow = null;
+  try {
+    notificationWindow = createNotificationWindow(notificationData);
+  } catch (error) {
+    notificationLogger.warn("show-notification:custom-create-failed", {
+      displayName: notificationData.displayName,
+      preset: notificationData.preset || "default",
+      error: error?.message || String(error),
+    });
+    onFinished();
+    return null;
+  }
+
+  const notificationWebContentsId = notificationWindow.webContents.id;
+  if (playSound) {
+    playAchievementNotificationSound(achievement);
+  }
+
+  if (shouldScreenshot) {
+    const armScreenshot = () =>
+      armPendingNotificationScreenshot(
+        notificationWindow,
+        () => captureAchievementUnlockScreenshot(notificationData),
+        notificationData.durationMs,
+      );
+    if (notificationWindow.webContents.isLoading()) {
+      notificationWindow.webContents.once("did-finish-load", armScreenshot);
+    } else {
+      armScreenshot();
+    }
+  }
+
+  let closeTimer = null;
+  notificationWindow.on("closed", () => {
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+    clearPendingNotificationScreenshot(notificationWebContentsId);
+    windowLogger.info("create-notification-window:closed", {
+      preset: notificationData.preset || "default",
+      position: notificationData.position || "center-bottom",
+    });
+    onFinished();
+  });
+
+  closeTimer = setTimeout(() => {
+    closeTimer = null;
+    if (!notificationWindow.isDestroyed()) {
+      notificationWindow.close();
+    }
+  }, duration);
+  return notificationWindow;
+}
+
 function processNextNotification() {
   if (isNotificationShowing || earnedNotificationQueue.length === 0) return;
 
   const achievement = earnedNotificationQueue.shift();
   isNotificationShowing = true;
+  let queueEntryFinished = false;
+  const finishCurrentNotification = () => {
+    if (queueEntryFinished) return;
+    queueEntryFinished = true;
+    isNotificationShowing = false;
+    processNextNotification();
+    flushPendingPlatinum();
+  };
 
   const lang = selectedLanguage || "english";
 
@@ -13202,9 +13596,17 @@ function processNextNotification() {
   };
 
   const preset = achievement.preset || "default";
-  const { presetFolder } = resolveNotificationPresetFolder(preset);
   const normalizedPreset = String(preset || "").trim().toLowerCase();
-  if (notificationData.useSanPreset && notificationData.sanPreset) {
+  const isNativeWindowsPreset = isNativeWindowsNotificationPreset(preset);
+  const { presetFolder } = isNativeWindowsPreset
+    ? { presetFolder: null }
+    : resolveNotificationPresetFolder(preset);
+
+  if (
+    !isNativeWindowsPreset &&
+    notificationData.useSanPreset &&
+    notificationData.sanPreset
+  ) {
     try {
       const sanTheme = buildSanThemeForNotification(
         notificationData.sanPreset,
@@ -13229,6 +13631,7 @@ function processNextNotification() {
   );
 
   if (
+    !isNativeWindowsPreset &&
     notificationData.isPlatinum &&
     ["xbox series platinum - purple", "xbox series platinum"].includes(
       normalizedPreset,
@@ -13277,7 +13680,9 @@ function processNextNotification() {
       : 0;
   const duration =
     overrideDurationMs ||
-    (notificationData.sanTheme
+    (isNativeWindowsPreset
+      ? 5000
+      : notificationData.sanTheme
       ? Math.round(
           (Number(notificationData.sanTheme?.customisation?.displaytime) || 8) *
             1000,
@@ -13291,94 +13696,126 @@ function processNextNotification() {
       duration / 1000,
     );
   }
-  const notificationWindow = createNotificationWindow(notificationData);
-  const notificationWebContentsId = notificationWindow.webContents.id;
-
-  if (
-    mainWindow &&
-    !mainWindow.isDestroyed() &&
-    achievement.sound &&
-    achievement.sound !== "mute"
-  ) {
-    mainWindow.webContents.send("play-sound", achievement.sound);
-  }
-
-  // Screenshot
   const disableByPrefs = !!cachedPreferences.disableAchievementScreenshot;
   const shouldScreenshot =
     !notificationData.isTest &&
     !notificationData.skipScreenshot &&
     !disableByPrefs;
 
-  const doShot = async () => {
-    try {
-      if (!screenshot) {
-        console.warn(
-          tUi(
-            "main.log.screenshotDesktopMissing",
-            {},
-            "screenshot-desktop not installed",
-          ),
-        );
-        return;
-      }
-      const gameName = selectedConfig || "Unknown Game";
-      const achName = notificationData.displayName || "Achievement";
-      notificationLogger.info("notification:screenshot:start", {
-        displayName: achName,
-        config: notificationData.config_path || null,
+  if (isNativeWindowsPreset) {
+    let nativeCompletionTimer = null;
+    let nativeFallbackStarted = false;
+    let nativeActionsStarted = false;
+    let nativeShowReceived = false;
+    const clearNativeCompletionTimer = () => {
+      if (!nativeCompletionTimer) return;
+      clearTimeout(nativeCompletionTimer);
+      nativeCompletionTimer = null;
+    };
+    const scheduleNativeCompletion = (delayMs, reason) => {
+      clearNativeCompletionTimer();
+      nativeCompletionTimer = setTimeout(() => {
+        nativeCompletionTimer = null;
+        if (reason === "no-show-signal") {
+          notificationLogger.warn(
+            "native-windows-notification:no-show-signal",
+            {
+              displayName: notificationData.displayName,
+              config: notificationData.config_path || null,
+            },
+          );
+        }
+        finishCurrentNotification();
+      }, delayMs);
+      nativeCompletionTimer.unref?.();
+    };
+    const startNativeFallback = (reason, error = null) => {
+      if (nativeFallbackStarted || queueEntryFinished) return;
+      nativeFallbackStarted = true;
+      clearNativeCompletionTimer();
+      notificationData.preset = "Default";
+      const { presetFolder: fallbackPresetFolder } =
+        resolveNotificationPresetFolder(notificationData.preset);
+      const fallbackDuration =
+        overrideDurationMs ||
+        getPresetAnimationDuration(fallbackPresetFolder);
+      notificationData.durationMs = fallbackDuration;
+      notificationData.durationOverridden = overrideDurationMs > 0;
+      notificationLogger.warn("native-windows-notification:fallback", {
+        displayName: notificationData.displayName,
+        reason,
+        error: error ? error?.message || String(error) : null,
       });
-      const saved = await saveFullScreenShot(gameName, achName);
-      notificationLogger.info("notification:screenshot:success", {
-        displayName: achName,
-        path: saved,
+      showCustomAchievementNotification({
+        achievement,
+        notificationData,
+        duration: fallbackDuration,
+        shouldScreenshot: shouldScreenshot && !nativeActionsStarted,
+        playSound: !nativeActionsStarted,
+        onFinished: finishCurrentNotification,
       });
-    } catch (err) {
-      const code = err?.code || null;
-      const error = err?.message || String(err);
-      const payload = {
-        displayName: notificationData.displayName || "Achievement",
-        code,
-        error,
-      };
-      if (code === "capture-timeout") {
-        notificationLogger.warn("notification:screenshot:timeout", payload);
-      } else {
-        notificationLogger.warn("notification:screenshot:failed", payload);
-      }
-    }
-  };
+    };
 
-  if (shouldScreenshot) {
-    const armScreenshot = () =>
-      armPendingNotificationScreenshot(
-        notificationWindow,
-        doShot,
-        notificationData.durationMs,
-      );
-    if (notificationWindow.webContents.isLoading()) {
-      notificationWindow.webContents.once("did-finish-load", armScreenshot);
-    } else {
-      armScreenshot();
+    const nativeNotification = showNativeWindowsAchievementNotification(
+      notificationData,
+      {
+        onShow: () => {
+          if (nativeFallbackStarted || queueEntryFinished) return;
+          nativeShowReceived = true;
+          scheduleNativeCompletion(
+            NATIVE_WINDOWS_QUEUE_INTERVAL_MS,
+            "shown",
+          );
+        },
+        onFailed: (error) => {
+          startNativeFallback("failed-event", error);
+        },
+        onClose: () => {
+          if (!nativeFallbackStarted) {
+            clearNativeCompletionTimer();
+            finishCurrentNotification();
+          }
+        },
+      },
+    );
+
+    if (!nativeNotification) {
+      startNativeFallback("show-failed");
+      return;
     }
+    if (nativeFallbackStarted || queueEntryFinished) {
+      return;
+    }
+    nativeActionsStarted = true;
+    playAchievementNotificationSound(achievement);
+    if (shouldScreenshot) {
+      notificationLogger.info("notification:screenshot-trigger", {
+        reason: "native-windows",
+      });
+      setImmediate(() => {
+        void captureAchievementUnlockScreenshot(notificationData);
+      });
+    }
+    if (
+      !nativeFallbackStarted &&
+      !nativeShowReceived &&
+      !queueEntryFinished
+    ) {
+      scheduleNativeCompletion(
+        NATIVE_WINDOWS_SHOW_WATCHDOG_MS,
+        "no-show-signal",
+      );
+    }
+    return;
   }
 
-  notificationWindow.on("closed", () => {
-    clearPendingNotificationScreenshot(notificationWebContentsId);
-    windowLogger.info("create-notification-window:closed", {
-      preset: notificationData.preset || "default",
-      position: notificationData.position || "center-bottom",
-    });
-    isNotificationShowing = false;
-    processNextNotification();
-    flushPendingPlatinum();
+  showCustomAchievementNotification({
+    achievement,
+    notificationData,
+    duration,
+    shouldScreenshot,
+    onFinished: finishCurrentNotification,
   });
-
-  setTimeout(() => {
-    if (!notificationWindow.isDestroyed()) {
-      notificationWindow.close();
-    }
-  }, duration);
 }
 
 function flushPendingPlatinum() {
@@ -15088,6 +15525,8 @@ async function monitorAchievementsFile(filePath) {
           appid: activeAppId || null,
           restartDelayMs,
         });
+        clearLumaPlayReadCache();
+        scheduleSnapshotFromEvent(0);
       },
       onWarn: (error) => {
         appLogger.warn("active-lumaplay:event-warning", {
@@ -15095,6 +15534,30 @@ async function monitorAchievementsFile(filePath) {
           appid: activeAppId || null,
           error: String(error || ""),
         });
+      },
+      onLifecycle: (lifecycle = {}) => {
+        const state = String(lifecycle?.state || "");
+        if (state === "ready" || state === "spawned") return;
+        const details = {
+          config: activeConfigName,
+          appid: activeAppId || null,
+          state,
+          pid: Number(lifecycle?.pid) || 0,
+          restartCount: Number(lifecycle?.restartCount) || 0,
+          consecutiveFailures: Number(lifecycle?.consecutiveFailures) || 0,
+          circuitOpenUntil: Number(lifecycle?.circuitOpenUntil) || 0,
+          reason: String(lifecycle?.reason || ""),
+        };
+        if (
+          state === "exited" ||
+          state === "failed" ||
+          state === "circuit-open" ||
+          state === "force-stopping"
+        ) {
+          appLogger.warn("active-lumaplay:event-lifecycle", details);
+        } else {
+          appLogger.info("active-lumaplay:event-lifecycle", details);
+        }
       },
       onChange: () => {
         clearLumaPlayReadCache();
@@ -18315,29 +18778,21 @@ ipcMain.handle(
       const configPath = path.join(configsDir, `${selectedConfig}.json`);
       if (fs.existsSync(configPath)) {
         const configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (isProcessNameWatcherEnabled(cachedPreferences)) {
-          const safeConfigName = sanitizeConfigName(selectedConfig);
-          configData.__playtimeKey = safeConfigName;
-          if (child?.pid) {
-            configData.__launchPid = child.pid;
-            manualLaunchPidMap.set(child.pid, selectedConfig);
-            setTimeout(() => {
-              if (manualLaunchPidMap.get(child.pid) === selectedConfig) {
-                manualLaunchPidMap.delete(child.pid);
-              }
-            }, 120000);
-          }
-          manualLaunchInProgress = true;
-          detectedConfigName = configData.name;
-          activePlaytimeConfigs.add(configData.name);
-          startPlaytimeLogWatcher(configData);
-        } else {
-          appLogger.info("process-poller:playtime-watch-skipped", {
-            reason: "process-watcher-disabled",
-            config: selectedConfig,
-            appid: String(configData?.appid || ""),
-          });
+        const safeConfigName = sanitizeConfigName(selectedConfig);
+        configData.__playtimeKey = safeConfigName;
+        if (child?.pid) {
+          configData.__launchPid = child.pid;
+          manualLaunchPidMap.set(child.pid, selectedConfig);
+          setTimeout(() => {
+            if (manualLaunchPidMap.get(child.pid) === selectedConfig) {
+              manualLaunchPidMap.delete(child.pid);
+            }
+          }, 120000);
         }
+        manualLaunchInProgress = true;
+        detectedConfigName = configData.name;
+        activePlaytimeConfigs.add(configData.name);
+        startPlaytimeLogWatcher(configData);
       } else {
         notifyError(
           tUi("main.notify.config.notFound", { config: selectedConfig }),
@@ -18377,9 +18832,6 @@ function isEpicOfficialBackgroundWorkBootReady() {
     global.bootManualSeedComplete !== true
   ) {
     return false;
-  }
-  if (!isProcessNameWatcherEnabled(cachedPreferences)) {
-    return true;
   }
   return autoSelectProcessPollerStarted === true;
 }
@@ -19653,8 +20105,9 @@ app.whenReady().then(async () => {
     global.disableProgress = prefs.disableProgress === true;
     global.disablePlaytime = prefs.disablePlaytime === true;
     try {
-      processPoller.setEnabled(isProcessNameWatcherEnabled(prefs));
-    } catch { }
+      processPoller.setEnabled(true);
+      processPoller.setEventWatcherEnabled(isProcessNameWatcherEnabled(prefs));
+    } catch {}
     selectedSound = prefs.sound || "mute";
     selectedPreset = prefs.preset || "default";
     selectedPosition = prefs.position || "center-bottom";
@@ -20379,6 +20832,7 @@ const PROCESS_COMMAND_LINE_FAILURE_TTL_MS = 10 * 1000;
 const PROCESS_COMMAND_LINE_CACHE_MAX_ENTRIES = 256;
 const processCommandLineCache = new Map();
 let processCommandLineWarnLastAt = 0;
+let processMatchAmbiguityWarnLastAt = 0;
 
 function getConfigNameFromConfigFilePath(filePath) {
   try {
@@ -20622,15 +21076,12 @@ function stopAutoSelectProcessPoller() {
 
 function startAutoSelectProcessPoller() {
   if (autoSelectProcessPollerStarted) return;
-  if (!isProcessNameWatcherEnabled(cachedPreferences)) {
-    appLogger.info("process-poller:auto-select-start-skipped", {
-      reason: "process-watcher-disabled",
-    });
-    return;
-  }
   try {
     processPoller.setEnabled(true);
-  } catch { }
+    processPoller.setEventWatcherEnabled(
+      isProcessNameWatcherEnabled(cachedPreferences),
+    );
+  } catch {}
   autoSelectProcessPollerStarted = true;
   ensureAutoSelectIndexReady().catch(() => { });
   autoSelectProcessPollerUnsubscribe = processPoller.subscribe((list) => {
@@ -20689,6 +21140,7 @@ function scheduleAutoSelectProcessPollerAfterBoot() {
 let detectedConfigName = null;
 const activePlaytimeConfigs = new Set();
 let autoSelectRunningGameConfigInFlight = false;
+let autoSelectPendingProcesses = null;
 
 function splitArgsString(input) {
   const argStr = String(input || "").trim();
@@ -20751,11 +21203,18 @@ function getConfigProcessArgTokens(configData) {
 
 async function enrichProcessCommandLinesForAutoSelect(procsByExe) {
   const now = Date.now();
+  const detectionMode = String(
+    processPoller.getStatus()?.processDetectionMode || "",
+  );
+  const requireCommandLineForArguments = detectionMode === "hybrid";
   const livePids = new Set();
   for (const procs of procsByExe.values()) {
     for (const proc of Array.isArray(procs) ? procs : []) {
       const pid = Math.floor(Number(proc?.pid));
       if (Number.isFinite(pid) && pid > 0) livePids.add(pid);
+      if (proc && typeof proc === "object") {
+        proc.__processDetectionMode = detectionMode;
+      }
     }
   }
   for (const [pid, cached] of processCommandLineCache) {
@@ -20777,7 +21236,8 @@ async function enrichProcessCommandLinesForAutoSelect(procsByExe) {
     for (const proc of Array.isArray(procs) ? procs : []) {
       const pid = Math.floor(Number(proc?.pid));
       if (!Number.isFinite(pid) || pid <= 0) continue;
-      proc.__requireCommandLineForArgs = true;
+      proc.__requireCommandLineForArgs = requireCommandLineForArguments;
+      if (!requireCommandLineForArguments) continue;
       if (normalizeProcessCmdLine(proc)) continue;
 
       const processName = String(proc?.name || "").trim().toLowerCase();
@@ -20843,17 +21303,25 @@ function processMatchesConfig(proc, configData, configName) {
   const argTokens = getConfigProcessArgTokens(configData);
   if (!argTokens.length) return true;
   const cmdLine = normalizeProcessCmdLine(proc);
-  if (!cmdLine) return proc.__requireCommandLineForArgs !== true;
+  if (!cmdLine) {
+    const detectionMode = String(
+      proc.__processDetectionMode ||
+        processPoller.getStatus()?.processDetectionMode ||
+        "",
+    );
+    return (
+      detectionMode === "fallback-preference" ||
+      detectionMode === "fallback-degraded" ||
+      detectionMode === "poll"
+    );
+  }
   return argTokens.every((token) => cmdLine.includes(token));
 }
 
-async function autoSelectRunningGameConfig(processes) {
-  if (autoSelectRunningGameConfigInFlight) return;
-  autoSelectRunningGameConfigInFlight = true;
+async function autoSelectRunningGameConfigOnce(processes) {
   try {
     const list = Array.isArray(processes) ? processes : [];
     if (!list.length) return;
-    if (!isProcessNameWatcherEnabled(cachedPreferences)) return;
     if (process.env.ACH_LOG_PROCESSES === "1") {
       const logPath = path.join(app.getPath("userData"), "process-log.txt");
       fs.writeFileSync(logPath, list.map((p) => p.name).join("\n"), "utf8");
@@ -21034,41 +21502,100 @@ async function autoSelectRunningGameConfig(processes) {
       const candidates = autoSelectIndex.exeToConfigs.get(exe);
       if (!candidates || !candidates.size) continue;
 
-      const orderedCandidates = Array.from(candidates).sort((a, b) => {
-        const aEntry = getEntry(a);
-        const bEntry = getEntry(b);
-        return (
-          getConfigProcessArgTokens(bEntry?.data).length -
-          getConfigProcessArgTokens(aEntry?.data).length
-        );
-      });
-      for (const configName of orderedCandidates) {
+      const activeCandidateStillRunning = Array.from(candidates).some(
+        (configName) => {
+          if (!activePlaytimeConfigs.has(configName)) return false;
+          const activeEntry = getEntry(configName);
+          return (
+            !!activeEntry &&
+            (Array.isArray(procs) ? procs : []).some((processInfo) =>
+              processMatchesConfig(
+                processInfo,
+                activeEntry.data,
+                activeEntry.name,
+              ),
+            )
+          );
+        },
+      );
+      if (activeCandidateStillRunning) continue;
+
+      const matchingCandidates = [];
+      for (const configName of Array.from(candidates)) {
         if (activePlaytimeConfigs.has(configName)) continue;
 
         const entry = getEntry(configName);
         if (!entry) continue;
         if (isBlacklisted(entry)) continue;
 
-        const running = (Array.isArray(procs) ? procs : []).some((p) =>
-          processMatchesConfig(p, entry.data, entry.name),
+        const argTokens = getConfigProcessArgTokens(entry.data);
+        const matchingProcesses = (Array.isArray(procs) ? procs : []).filter(
+          (processInfo) =>
+            processMatchesConfig(processInfo, entry.data, entry.name),
         );
-        if (!running) continue;
-
-        detectedConfigName = entry.name;
-        activePlaytimeConfigs.add(entry.name);
-        notifyInfo(
-          tUi("main.notify.config.started", {
-            name: entry?.data?.name || entry?.name || entry.name,
-          }),
-        );
-        entry.data.__playtimeKey = sanitizeConfigName(entry.name);
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("auto-select-config", entry.name);
-          startPlaytimeLogWatcher(entry.data);
-        }
-        return;
+        if (!matchingProcesses.length) continue;
+        const exactArgumentMatch =
+          argTokens.length > 0 &&
+          matchingProcesses.some((processInfo) => {
+            const commandLine = normalizeProcessCmdLine(processInfo);
+            return (
+              !!commandLine &&
+              argTokens.every((token) => commandLine.includes(token))
+            );
+          });
+        matchingCandidates.push({
+          configName,
+          entry,
+          exactArgumentMatch,
+          generic: argTokens.length === 0,
+        });
       }
+
+      if (!matchingCandidates.length) continue;
+      matchingCandidates.sort((a, b) => {
+        if (a.exactArgumentMatch !== b.exactArgumentMatch) {
+          return a.exactArgumentMatch ? -1 : 1;
+        }
+        if (a.generic !== b.generic) return a.generic ? -1 : 1;
+        return String(a.configName).localeCompare(String(b.configName));
+      });
+
+      const selectedCandidate = matchingCandidates[0];
+      const detectionMode = String(
+        processPoller.getStatus()?.processDetectionMode || "",
+      );
+      if (
+        matchingCandidates.length > 1 &&
+        (detectionMode === "fallback-preference" ||
+          detectionMode === "fallback-degraded") &&
+        Date.now() - processMatchAmbiguityWarnLastAt >= 30000
+      ) {
+        processMatchAmbiguityWarnLastAt = Date.now();
+        appLogger.warn("process-poller:ambiguous-executable-match", {
+          executable: exe,
+          detectionMode,
+          candidates: matchingCandidates.map((candidate) =>
+            sanitizeConfigName(candidate.configName),
+          ),
+          selected: sanitizeConfigName(selectedCandidate.configName),
+        });
+      }
+
+      const entry = selectedCandidate.entry;
+      detectedConfigName = entry.name;
+      activePlaytimeConfigs.add(entry.name);
+      notifyInfo(
+        tUi("main.notify.config.started", {
+          name: entry?.data?.name || entry?.name || entry.name,
+        }),
+      );
+      entry.data.__playtimeKey = sanitizeConfigName(entry.name);
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("auto-select-config", entry.name);
+        startPlaytimeLogWatcher(entry.data);
+      }
+      return;
     }
   } catch (err) {
     notifyError(
@@ -21076,8 +21603,31 @@ async function autoSelectRunningGameConfig(processes) {
         error: err?.message || String(err),
       }),
     );
+  }
+}
+
+async function autoSelectRunningGameConfig(processes) {
+  autoSelectPendingProcesses = Array.isArray(processes) ? processes : [];
+  if (autoSelectRunningGameConfigInFlight) return;
+
+  autoSelectRunningGameConfigInFlight = true;
+  try {
+    while (autoSelectPendingProcesses !== null) {
+      const nextProcesses = autoSelectPendingProcesses;
+      autoSelectPendingProcesses = null;
+      await autoSelectRunningGameConfigOnce(nextProcesses);
+    }
   } finally {
     autoSelectRunningGameConfigInFlight = false;
+    if (autoSelectPendingProcesses !== null) {
+      const trailingProcesses = autoSelectPendingProcesses;
+      autoSelectPendingProcesses = null;
+      autoSelectRunningGameConfig(trailingProcesses).catch((err) => {
+        appLogger.warn("auto-select:pending-snapshot-failed", {
+          error: err?.message || String(err),
+        });
+      });
+    }
   }
 }
 

@@ -8,9 +8,17 @@ const DEFAULT_INTERVAL_MS = 2000;
 const WINDOWS_EVENT_FALLBACK_INTERVAL_MS = 12000;
 const WINDOWS_EVENT_RESTART_DELAY_MS = 1500;
 const EVENT_SNAPSHOT_DEBOUNCE_MS = 100;
-const EVENT_WATCHER_ENABLED =
-  process.platform === "win32" && process.env.ACH_PROCESS_EVENT_WATCHER !== "0";
+const EVENT_HOST_STATUS_LOG_INTERVAL_MS = 60 * 1000;
+const EVENT_HOST_MEMORY_LOG_DELTA_MB = 25;
+const EVENT_WATCHER_SUPPORTED = process.platform === "win32";
+const EVENT_WATCHER_RUNTIME_ALLOWED =
+  process.env.ACH_PROCESS_EVENT_WATCHER !== "0";
 let pollerEnabled = process.env.ACH_DISABLE_PROCESS_WATCHER !== "1";
+let eventWatcherPreferenceEnabled = true;
+let eventWatcherEnabled =
+  EVENT_WATCHER_SUPPORTED &&
+  EVENT_WATCHER_RUNTIME_ALLOWED &&
+  eventWatcherPreferenceEnabled;
 const appLogger = createLogger("app");
 
 function parseInterval(value, fallback) {
@@ -19,12 +27,22 @@ function parseInterval(value, fallback) {
   return Math.max(250, Math.floor(next));
 }
 
-let pollIntervalMs = EVENT_WATCHER_ENABLED
+let configuredPollIntervalMs = EVENT_WATCHER_SUPPORTED
   ? parseInterval(
       process.env.ACH_PROCESS_FALLBACK_POLL_MS ?? process.env.ACH_PROCESS_POLL_MS,
       WINDOWS_EVENT_FALLBACK_INTERVAL_MS,
     )
   : parseInterval(process.env.ACH_PROCESS_POLL_MS, DEFAULT_INTERVAL_MS);
+const limitedFallbackIntervalMs = parseInterval(
+  process.env.ACH_PROCESS_LIMITED_FALLBACK_POLL_MS,
+  DEFAULT_INTERVAL_MS,
+);
+let eventWatcherDegraded = eventWatcherEnabled;
+let pollIntervalMs = eventWatcherEnabled
+  ? limitedFallbackIntervalMs
+  : EVENT_WATCHER_SUPPORTED
+    ? limitedFallbackIntervalMs
+    : configuredPollIntervalMs;
 let timer = null;
 let inflight = false;
 let lastSnapshot = [];
@@ -39,6 +57,12 @@ let pendingEventMeta = null;
 let forcedTickPending = false;
 let forcedTickSource = "event-resync";
 let lastEventHostStatus = null;
+let lastEventHostLifecycle = null;
+let lastEventHostStatusLogAt = 0;
+let lastLoggedEventHostWorkingSetMb = 0;
+let eventHostResyncTimer = null;
+let eventHostResyncSource = "event-host";
+let runGeneration = 0;
 
 let psListModulePromise = null;
 async function loadPsListModule() {
@@ -142,6 +166,25 @@ function scheduleEventSnapshot(meta = {}) {
   }, EVENT_SNAPSHOT_DEBOUNCE_MS);
 }
 
+function requestEventHostResync(source = "event-host") {
+  eventHostResyncSource = String(source || "event-host");
+  if (eventHostResyncTimer) return;
+  eventHostResyncTimer = setTimeout(() => {
+    eventHostResyncTimer = null;
+    const nextSource = eventHostResyncSource;
+    eventHostResyncSource = "event-host";
+    tick(nextSource, true).catch(() => {});
+  }, EVENT_SNAPSHOT_DEBOUNCE_MS);
+}
+
+function clearEventHostResyncTimer() {
+  if (eventHostResyncTimer) {
+    clearTimeout(eventHostResyncTimer);
+    eventHostResyncTimer = null;
+  }
+  eventHostResyncSource = "event-host";
+}
+
 function updateSnapshotMapFromList(list) {
   const nextMap = new Map();
   for (const raw of Array.isArray(list) ? list : []) {
@@ -220,9 +263,11 @@ async function tick(source = "poll", forceEmit = false) {
     }
     return;
   }
+  const generation = runGeneration;
   inflight = true;
   try {
     const list = await fetchProcesses();
+    if (!pollerEnabled || generation !== runGeneration) return;
     const changed = updateSnapshotMapFromList(list);
     if (changed || forceEmit || !lastUpdated) {
       clearEventSnapshotTimer();
@@ -231,10 +276,12 @@ async function tick(source = "poll", forceEmit = false) {
       lastError = null;
     }
   } catch (err) {
-    lastError = err;
+    if (pollerEnabled && generation === runGeneration) {
+      lastError = err;
+    }
   } finally {
     inflight = false;
-    if (forcedTickPending) {
+    if (forcedTickPending && pollerEnabled) {
       const nextSource = forcedTickSource;
       forcedTickPending = false;
       forcedTickSource = "event-resync";
@@ -258,9 +305,60 @@ function stopFallbackPoller() {
   timer = null;
 }
 
+function getProcessDetectionMode() {
+  if (!pollerEnabled) return "disabled";
+  if (!EVENT_WATCHER_SUPPORTED) return "poll";
+  if (!eventWatcherPreferenceEnabled) return "fallback-preference";
+  if (!EVENT_WATCHER_RUNTIME_ALLOWED || !eventWatcherEnabled) {
+    return "fallback-degraded";
+  }
+  if (eventWatcherDegraded) return "fallback-degraded";
+  return "hybrid";
+}
+
+function getDesiredPollIntervalMs() {
+  const mode = getProcessDetectionMode();
+  return mode === "hybrid"
+    ? configuredPollIntervalMs
+    : mode === "disabled"
+      ? configuredPollIntervalMs
+      : limitedFallbackIntervalMs;
+}
+
+function applyDetectionMode(reason = "") {
+  const nextIntervalMs = getDesiredPollIntervalMs();
+  const intervalChanged = pollIntervalMs !== nextIntervalMs;
+  pollIntervalMs = nextIntervalMs;
+  if (intervalChanged && timer) {
+    stopFallbackPoller();
+    startFallbackPoller();
+  }
+  appLogger.info("process-poller:fallback-mode-changed", {
+    mode: getProcessDetectionMode(),
+    reason: String(reason || ""),
+    pollIntervalMs,
+    configuredPollIntervalMs,
+  });
+}
+
+function setEventWatcherDegraded(value, reason = "") {
+  const nextDegraded = value === true;
+  const stateChanged = eventWatcherDegraded !== nextDegraded;
+  eventWatcherDegraded = nextDegraded;
+  const intervalChanged = pollIntervalMs !== getDesiredPollIntervalMs();
+  if (stateChanged || intervalChanged) applyDetectionMode(reason);
+}
+
 function startEventWatcherIfNeeded() {
-  if (!EVENT_WATCHER_ENABLED || eventWatcher) return;
+  if (
+    !EVENT_WATCHER_SUPPORTED ||
+    !eventWatcherEnabled ||
+    eventWatcher
+  ) {
+    return;
+  }
   eventWatcherReady = false;
+  setEventWatcherDegraded(true, "native-provider-starting");
   const restartDelayMs = parseInterval(
     process.env.ACH_PROCESS_EVENT_RESTART_MS,
     WINDOWS_EVENT_RESTART_DELAY_MS,
@@ -278,6 +376,7 @@ function startEventWatcherIfNeeded() {
       appLogger.warn("process-poller:event-warning", {
         error: normalizedMessage,
       });
+      requestEventHostResync("event-warning");
     },
     onEvent: (payload) => {
       const changed = applyProcessEvent(payload);
@@ -312,15 +411,149 @@ function startEventWatcherIfNeeded() {
     },
     onStatus: (status = {}) => {
       lastEventHostStatus = {
+        ...(lastEventHostStatus || {}),
         ...status,
         updatedAt: Date.now(),
       };
+      if (
+        String(status?.type || "") === "ready" &&
+        typeof status?.processEnabled === "boolean"
+      ) {
+        eventWatcherReady = status.processEnabled;
+        setEventWatcherDegraded(
+          status.processEnabled !== true,
+          status.processEnabled === true
+            ? "process-channel-ready"
+            : "process-channel-unavailable",
+        );
+      } else if (String(status?.type || "") === "capacity-limit") {
+        eventWatcherReady = false;
+        setEventWatcherDegraded(true, "snapshot-capacity-limit");
+      } else if (String(status?.type || "") === "resource-limit") {
+        eventWatcherReady = false;
+        setEventWatcherDegraded(true, "native-resource-limit");
+      }
+      const now = Date.now();
+      const workingSetMb = Number(status?.workingSetMb) || 0;
+      const memoryDelta = Math.abs(
+        workingSetMb - lastLoggedEventHostWorkingSetMb,
+      );
+      const shouldLog =
+        String(status?.type || "") !== "heartbeat" ||
+        now - lastEventHostStatusLogAt >= EVENT_HOST_STATUS_LOG_INTERVAL_MS ||
+        memoryDelta >= EVENT_HOST_MEMORY_LOG_DELTA_MB;
+      if (shouldLog) {
+        lastEventHostStatusLogAt = now;
+        lastLoggedEventHostWorkingSetMb = workingSetMb;
+        appLogger.info("process-poller:event-host-status", {
+          type: String(status?.type || ""),
+          pid: Number(lastEventHostLifecycle?.pid) || 0,
+          generation: Number(lastEventHostLifecycle?.generation) || 0,
+          restartCount: Number(lastEventHostLifecycle?.restartCount) || 0,
+          workingSetMb,
+          privateMemoryMb: Number(status?.privateMemoryMb) || 0,
+          heapUsedMb: Number(status?.heapUsedMb) || 0,
+          externalMemoryMb: Number(status?.externalMemoryMb) || 0,
+          handleCount: Number(status?.handleCount) || 0,
+          uptimeMs: Number(status?.uptimeMs) || 0,
+          processed: Number(status?.processed) || 0,
+          dropped: Number(status?.dropped) || 0,
+          queueDepth: Number(status?.queueDepth) || 0,
+          limitMb: Number(status?.limitMb) || 0,
+          privateLimitMb: Number(status?.privateLimitMb) || 0,
+          handleLimit: Number(status?.handleLimit) || 0,
+          reason: String(status?.reason || ""),
+          watchMode: String(status?.watchMode || ""),
+          provider: String(status?.provider || ""),
+          memoryMetricSource: String(status?.memoryMetricSource || ""),
+          processCount: Number(status?.processCount) || 0,
+          capacity: Number(status?.capacity) || 0,
+          capacityLimited: status?.capacityLimited === true,
+          processEnabled:
+            typeof status?.processEnabled === "boolean"
+              ? status.processEnabled
+              : null,
+          lumaplayEnabled:
+            typeof status?.lumaplayEnabled === "boolean"
+              ? status.lumaplayEnabled
+              : null,
+        });
+      }
+    },
+    onLifecycle: (lifecycle = {}) => {
+      const state = String(lifecycle?.state || "").trim() || "unknown";
+      lastEventHostLifecycle = {
+        ...lifecycle,
+        state,
+        updatedAt: Date.now(),
+      };
+      if (state === "ready") {
+        eventWatcherReady = true;
+        setEventWatcherDegraded(false, "event-host-ready");
+      } else if (
+        state === "starting" ||
+        state === "spawned" ||
+        state === "restarting" ||
+        state === "restart-scheduled" ||
+        state === "circuit-open" ||
+        state === "circuit-half-open" ||
+        state === "stopping" ||
+        state === "force-stopping" ||
+        state === "stopped" ||
+        state === "exited" ||
+        state === "failed"
+      ) {
+        eventWatcherReady = false;
+        setEventWatcherDegraded(true, `event-host-${state}`);
+      }
+      const details = {
+        state,
+        pid: Number(lifecycle?.pid) || 0,
+        generation: Number(lifecycle?.generation) || 0,
+        restartCount: Number(lifecycle?.restartCount) || 0,
+        consecutiveFailures: Number(lifecycle?.consecutiveFailures) || 0,
+        circuitOpenUntil: Number(lifecycle?.circuitOpenUntil) || 0,
+        reason: String(lifecycle?.reason || ""),
+        exitCode:
+          lifecycle?.exitCode === null ||
+          lifecycle?.exitCode === undefined
+            ? null
+            : Number(lifecycle.exitCode),
+        signal: String(lifecycle?.signal || ""),
+        runtime: String(lifecycle?.runtime || ""),
+      };
+      if (
+        state === "failed" ||
+        state === "restarting" ||
+        state === "exited" ||
+        state === "circuit-open" ||
+        state === "force-stopping"
+      ) {
+        appLogger.warn("process-poller:event-host-lifecycle", details);
+      } else {
+        appLogger.info("process-poller:event-host-lifecycle", details);
+      }
+      if (
+        state === "ready" ||
+        state === "restarting" ||
+        state === "circuit-open" ||
+        state === "circuit-half-open" ||
+        state === "stopped" ||
+        state === "exited" ||
+        state === "failed"
+      ) {
+        requestEventHostResync(`event-host-${state}`);
+      }
     },
   });
 }
 
 function stopEventWatcher() {
   lastEventHostStatus = null;
+  lastEventHostLifecycle = null;
+  lastEventHostStatusLogAt = 0;
+  lastLoggedEventHostWorkingSetMb = 0;
+  clearEventHostResyncTimer();
   if (!eventWatcher) return;
   try {
     eventWatcher.stop();
@@ -331,17 +564,26 @@ function stopEventWatcher() {
 
 function start() {
   if (!pollerEnabled) return;
+  if (!timer && !eventWatcher) {
+    runGeneration += 1;
+  }
   startEventWatcherIfNeeded();
   startFallbackPoller();
   tick("poll", true).catch(() => {});
 }
 
 function stop() {
+  runGeneration += 1;
   stopFallbackPoller();
   stopEventWatcher();
   clearEventSnapshotTimer();
+  clearEventHostResyncTimer();
   forcedTickPending = false;
   forcedTickSource = "event-resync";
+  processByPid.clear();
+  lastSnapshot = [];
+  lastUpdated = 0;
+  lastError = null;
 }
 
 function subscribe(callback) {
@@ -371,22 +613,65 @@ function getStatus() {
   return {
     enabled: pollerEnabled,
     running: pollerEnabled && (!!timer || eventWatcherRunning),
-    mode: !pollerEnabled ? "disabled" : EVENT_WATCHER_ENABLED ? "hybrid" : "poll",
+    mode: getProcessDetectionMode(),
+    processDetectionMode: getProcessDetectionMode(),
     subscribers: subscribers.size,
     updatedAt: lastUpdated,
     pollIntervalMs,
+    configuredPollIntervalMs,
+    eventWatcherDegraded,
+    eventWatcherEnabled,
+    eventWatcherPreferenceEnabled,
     eventWatcherRunning,
     eventWatcherReady,
     eventHostStatus: lastEventHostStatus,
+    eventHostLifecycle: lastEventHostLifecycle,
     lastError: lastError ? String(lastError?.message || lastError) : "",
   };
 }
 
 function setIntervalMs(value) {
-  pollIntervalMs = parseInterval(value, pollIntervalMs);
+  configuredPollIntervalMs = parseInterval(value, configuredPollIntervalMs);
+  pollIntervalMs = getDesiredPollIntervalMs();
   if (timer) {
     stopFallbackPoller();
     startFallbackPoller();
+  }
+}
+
+function setEventWatcherEnabled(value) {
+  const nextPreference = value !== false;
+  const next =
+    EVENT_WATCHER_SUPPORTED &&
+    EVENT_WATCHER_RUNTIME_ALLOWED &&
+    nextPreference;
+  if (
+    eventWatcherEnabled === next &&
+    eventWatcherPreferenceEnabled === nextPreference
+  ) {
+    return;
+  }
+  eventWatcherPreferenceEnabled = nextPreference;
+  eventWatcherEnabled = next;
+  if (!eventWatcherEnabled) {
+    stopEventWatcher();
+    eventWatcherDegraded = false;
+    const fallbackReason = eventWatcherPreferenceEnabled
+      ? "native-provider-disabled-by-environment"
+      : "disabled-by-preferences";
+    applyDetectionMode(fallbackReason);
+    if (pollerEnabled && subscribers.size > 0) {
+      startFallbackPoller();
+      tick(getProcessDetectionMode(), true).catch(() => {});
+    }
+    return;
+  }
+  eventWatcherDegraded = true;
+  applyDetectionMode("enabled-by-preferences");
+  if (pollerEnabled && subscribers.size > 0) {
+    startEventWatcherIfNeeded();
+    startFallbackPoller();
+    tick("fallback-degraded", true).catch(() => {});
   }
 }
 
@@ -413,5 +698,6 @@ module.exports = {
   getStatus,
   setIntervalMs,
   setEnabled,
+  setEventWatcherEnabled,
   isEnabled,
 };

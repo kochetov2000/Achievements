@@ -1,29 +1,32 @@
 {
   "name": "Achievements",
-  "version": "1.2.5",
+  "version": "1.2.7",
   "description": "Achievements",
   "author": "JokerVerse",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "test:xbox-pc": "node tests/xbox-pc.test.js",
+    "verify:process-tree": "node build/run-electron-script.js build/verify-windows-process-tree.js",
+    "prepare:process-tree": "npm run verify:process-tree",
     "pack": "electron-builder --dir",
     "dl-browsers": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 node ./node_modules/playwright-core/cli.js install chromium chromium-headless-shell",
     "dist-linux": "npm run dl-browsers && electron-builder -l --x64",
-    "dist-windows": "npm run dl-browsers && electron-builder -w --x64"
+    "dist-windows": "npm run dl-browsers && npm run prepare:process-tree && electron-builder -w --x64"
   },
   "dependencies": {
+    "@vscode/windows-process-tree": ">=0.8.0",
     "@xboxreplay/xboxlive-auth": "^5.1.0",
     "adm-zip": "^0.6.0",
-    "axios": "^1.12.0",
+    "axios": "^1.19.0",
     "cheerio": "^1.1.2",
     "chokidar": "5.0.0",
     "crc-32": "^1.2.2",
     "electron-updater": "^6.8.3",
     "ini": "6.0.0",
     "jsdom": "29.1.1",
-    "koffi": "^3.1.2",
-    "playwright": "^1.55.0",
+    "koffi": "^3.1.4",
+    "playwright": "^1.62.1",
     "playwright-extra": "^4.3.6",
     "ps-list": "9.0.0",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
@@ -33,9 +36,9 @@
   },
   "devDependencies": {
     "cross-env": "^10.0.0",
-    "electron": "43.1.1",
+    "electron": "^43.2.0",
     "electron-builder": "^26.8.1",
-    "eslint": "^10.7.0",
+    "eslint": "^10.8.0",
     "rcedit": "^5.0.2"
   },
   "overrides": {
@@ -51,6 +54,7 @@
     "electron-winstaller": true,
     "electron": true,
     "koffi": true,
+    "@vscode/windows-process-tree": true,
     "uiohook-napi": true
   }
 }
