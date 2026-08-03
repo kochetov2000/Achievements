@@ -74,6 +74,7 @@ linux:
         - AppImage
         - tar.xz
     artifactName: ${productName}-${os}-${arch}.${ext}
+    category: Utility
     icon: icon.png
 
 publish:

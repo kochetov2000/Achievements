@@ -3,6 +3,7 @@
   "version": "1.2.7",
   "description": "Achievements",
   "author": "JokerVerse",
+  "desktopName": "git.jokerverse.achievements",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
