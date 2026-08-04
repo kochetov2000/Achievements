@@ -630,15 +630,23 @@ module.exports = function makeWatchedFolders({
           normalizedRootDir
             ? path.join(normalizedRootDir, "achievements.ini")
             : null,
+          normalizedRootDir ? path.join(normalizedRootDir, "stats.ini") : null,
           normalizedRootDir
             ? path.join(normalizedRootDir, "Stats", "achievements.ini")
+            : null,
+          normalizedRootDir
+            ? path.join(normalizedRootDir, "Stats", "stats.ini")
             : null,
           normalizedRootDir ? path.join(normalizedRootDir, "stats.bin") : null,
           meta?.save_path
             ? path.join(meta.save_path, "achievements.ini")
             : null,
+          meta?.save_path ? path.join(meta.save_path, "stats.ini") : null,
           meta?.save_path
             ? path.join(meta.save_path, "Stats", "achievements.ini")
+            : null,
+          meta?.save_path
+            ? path.join(meta.save_path, "Stats", "stats.ini")
             : null,
           meta?.save_path ? path.join(meta.save_path, "stats.bin") : null,
         ].filter(Boolean),
@@ -2376,6 +2384,7 @@ module.exports = function makeWatchedFolders({
     const out = [];
     if (base === "achievements.json") out.push("achievements-json");
     if (base === "achievements.ini") out.push("achievements-ini");
+    if (base === "stats.ini") out.push("online-fix-stats-ini");
     if (base === "stats.bin") out.push("stats-bin");
     if (base === "user_stats.ini") out.push("user-stats-ini");
     if (base.endsWith(".gpd")) out.push("xenia-gpd");
@@ -4556,7 +4565,14 @@ module.exports = function makeWatchedFolders({
     const snapKey = makeSnapshotKey(meta, appid, { filePath });
     const normPath = normalizePrefPath(filePath);
     if (!snapKey || !normPath) return "";
-    return `${snapKey}::${normPath}`;
+    const baseName = path.basename(filePath).toLowerCase();
+    const parentName = path.basename(path.dirname(filePath)).toLowerCase();
+    const parserRevision =
+      parentName === "stats" &&
+      (baseName === "achievements.ini" || baseName === "stats.ini")
+        ? "::online-fix-parser:2"
+        : "";
+    return `${snapKey}::${normPath}${parserRevision}`;
   }
 
   function readFileStatSyncSafe(fp) {
@@ -4779,6 +4795,7 @@ module.exports = function makeWatchedFolders({
     );
     // INI
     out.add(path.join(meta.save_path, "achievements.ini"));
+    out.add(path.join(meta.save_path, "stats.ini"));
     out.add(path.join(meta.save_path, "SteamData", "user_stats.ini"));
     out.add(path.join(meta.save_path, "user_stats.ini"));
     out.add(
@@ -4790,6 +4807,7 @@ module.exports = function makeWatchedFolders({
       ),
     );
     out.add(path.join(meta.save_path, "Stats", "achievements.ini"));
+    out.add(path.join(meta.save_path, "Stats", "stats.ini"));
     out.add(path.join(meta.save_path, String(meta.appid), "achievements.ini"));
     // UniverseLAN nested ini
     out.add(path.join(meta.save_path, "UniverseLANData", "Achievements.ini"));
@@ -4852,9 +4870,16 @@ module.exports = function makeWatchedFolders({
       if (appidStr && !base.endsWith(`_${appidStr}.bin`)) return;
     } else {
       if (
+        base === "stats.ini" &&
+        path.basename(path.dirname(filePath)).toLowerCase() !== "stats"
+      ) {
+        return;
+      }
+      if (
         ![
           "achievements.json",
           "achievements.ini",
+          "stats.ini",
           "stats.bin",
           "user_stats.ini",
         ].includes(base)
@@ -6076,6 +6101,7 @@ module.exports = function makeWatchedFolders({
       const names = [
         "achievements.ini",
         "achievements.json",
+        "stats.ini",
         "stats.bin",
         "user_stats.ini",
       ];
@@ -6093,7 +6119,10 @@ module.exports = function makeWatchedFolders({
                 ent.name.toLowerCase().endsWith(".gpd") &&
                 (!expectedXeniaGpd ||
                   ent.name.toLowerCase() === expectedXeniaGpd)) ||
-                (!isXenia && targetLc.includes(ent.name.toLowerCase())))
+                (!isXenia &&
+                  targetLc.includes(ent.name.toLowerCase()) &&
+                  (ent.name.toLowerCase() !== "stats.ini" ||
+                    path.basename(dir).toLowerCase() === "stats")))
             ) {
               return path.join(dir, ent.name);
             }
@@ -6416,9 +6445,12 @@ module.exports = function makeWatchedFolders({
 
       // INI (clasic)
       path.join(baseDir, "achievements.ini"),
+      path.join(baseDir, "stats.ini"),
       path.join(baseDir, id, "achievements.ini"),
       path.join(baseDir, "Stats", "achievements.ini"),
+      path.join(baseDir, "Stats", "stats.ini"),
       path.join(baseDir, id, "Stats", "achievements.ini"),
+      path.join(baseDir, id, "Stats", "stats.ini"),
       // UniverseLAN nested location
       path.join(baseDir, "UniverseLANData", "Achievements.ini"),
 
@@ -6438,6 +6470,7 @@ module.exports = function makeWatchedFolders({
       path.join(parentDir, id, "achievements.json"),
       path.join(parentDir, id, "achievements.ini"),
       path.join(parentDir, id, "Stats", "achievements.ini"),
+      path.join(parentDir, id, "Stats", "stats.ini"),
       path.join(parentDir, id, "SteamData", "user_stats.ini"),
       path.join(parentDir, id, "user_stats.ini"),
       path.join(parentDir, id, "stats.bin"),
@@ -8348,6 +8381,7 @@ module.exports = function makeWatchedFolders({
       let discoveredMap = null;
       let discovered = [];
       let tenokeFound = null;
+      let nemirtingasEpicDiscovery = false;
 
       if (!strictRootProfile) {
         const gpdFiles = await discoverGpdFilesUnder(
@@ -9513,6 +9547,8 @@ module.exports = function makeWatchedFolders({
               !gogInfoFound && (await discoverNemirtingasEpicAppIds(rootPath));
             const shouldFallbackEpic =
               epicDiscoveredMap instanceof Map && epicDiscoveredMap.size === 0;
+            nemirtingasEpicDiscovery =
+              epicDiscoveredMap instanceof Map && epicDiscoveredMap.size > 0;
             discoveredMap =
               epicDiscoveredMap !== null && !shouldFallbackEpic
                 ? epicDiscoveredMap
@@ -9555,19 +9591,26 @@ module.exports = function makeWatchedFolders({
               (pendingSet && pendingSet.has(normalizedDir)));
 
           if (!existingConfigIds.has(id)) {
-            const autoInflightKey = `${String(id)}:auto`;
+            const discoveredPlatform = nemirtingasEpicDiscovery
+              ? "epic"
+              : null;
+            const autoInflightKey = `${String(id)}:${discoveredPlatform || "auto"}`;
             if (
               inflightAppIds.has(autoInflightKey) ||
-              wasObservedGenerationVariantRecent(id, null)
+              wasObservedGenerationVariantRecent(id, discoveredPlatform)
             ) {
               continue;
             }
-            if (isAppIdBlacklisted(id, null, blacklistState)) continue;
+            if (
+              isAppIdBlacklisted(id, discoveredPlatform, blacklistState)
+            ) {
+              continue;
+            }
             if (alreadyTracked) continue;
             brandNewIds.push(id);
             generationTasks.push({
               appid: id,
-              forcePlatform: null,
+              forcePlatform: discoveredPlatform,
               appDir,
               normalizedPath: normalizedDir,
             });
@@ -9575,7 +9618,9 @@ module.exports = function makeWatchedFolders({
             continue;
           }
 
-          const targetPlatform = determineAlternatePlatform(id);
+          const targetPlatform = nemirtingasEpicDiscovery
+            ? "epic"
+            : determineAlternatePlatform(id);
           if (!normalizedDir || alreadyTracked || !targetPlatform) continue;
           if (isAppIdBlacklisted(id, targetPlatform, blacklistState)) continue;
           const targetInflightKey = `${String(id)}:${targetPlatform || "auto"}`;
@@ -10274,6 +10319,10 @@ module.exports = function makeWatchedFolders({
           !isPs4Xml &&
           !isSteamSchemaBin &&
           !isSteamUserBin &&
+          !(
+            base === "stats.ini" &&
+            path.basename(path.dirname(filePath)).toLowerCase() === "stats"
+          ) &&
           ![
             "achievements.json",
             "achievements.ini",
@@ -10523,6 +10572,10 @@ module.exports = function makeWatchedFolders({
           !isPs4Xml &&
           !isSteamSchemaBin &&
           !isSteamUserBin &&
+          !(
+            base === "stats.ini" &&
+            path.basename(path.dirname(filePath)).toLowerCase() === "stats"
+          ) &&
           ![
             "achievements.json",
             "achievements.ini",
