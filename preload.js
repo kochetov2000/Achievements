@@ -442,6 +442,34 @@ ipcRenderer.on("show-notification", (_event, data) => {
   applyNotificationRarityBorder(data);
 });
 
+let notificationNavigationClickEnabled = false;
+
+function handleNotificationNavigationClick(event) {
+  if (!notificationNavigationClickEnabled || event?.button !== 0) return;
+  notificationNavigationClickEnabled = false;
+  try {
+    document.documentElement.style.cursor = "";
+  } catch {}
+  ipcRenderer.send("notification-navigation:click");
+}
+
+ipcRenderer.on("notification-navigation:enable", () => {
+  if (notificationNavigationClickEnabled) return;
+  notificationNavigationClickEnabled = true;
+  try {
+    document.documentElement.style.cursor = "pointer";
+  } catch {}
+  window.addEventListener("click", handleNotificationNavigationClick, true);
+});
+
+ipcRenderer.on("notification-navigation:disable", () => {
+  notificationNavigationClickEnabled = false;
+  try {
+    document.documentElement.style.cursor = "";
+  } catch {}
+  window.removeEventListener("click", handleNotificationNavigationClick, true);
+});
+
 contextBridge.exposeInMainWorld("api", {
   // Config management
   saveConfig: (config) => ipcRenderer.invoke("saveConfig", config),
@@ -465,6 +493,8 @@ contextBridge.exposeInMainWorld("api", {
   clearActiveConfig: (payload = {}) =>
     ipcRenderer.invoke("config:clear-active", payload),
   blacklistConfig: (payload) => ipcRenderer.invoke("config:blacklist", payload),
+  addManualBlacklistedAppIds: (appids) =>
+    ipcRenderer.invoke("blacklist:add-manual", { appids }),
   getBlacklist: () => ipcRenderer.invoke("blacklist:list"),
   resetBlacklist: () => ipcRenderer.invoke("blacklist:reset"),
   isAppIdBlacklisted: (appid) => ipcRenderer.invoke("blacklist:check", appid),
@@ -640,6 +670,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("overlay:log", { level, message, meta }),
   overlayVisibilityAck: (payload) =>
     ipcRenderer.send("overlay:visibility-ack", payload),
+  overlayNavigationReady: () =>
+    ipcRenderer.send("overlay:navigation-ready"),
+  overlayNavigationResult: (payload) =>
+    ipcRenderer.send("overlay:navigation-result", payload),
   checkLocalGameImage: (appid, platform) =>
     ipcRenderer.invoke("checkLocalGameImage", appid, platform),
   checkExecutableExists: (exePath) =>
@@ -674,6 +708,13 @@ contextBridge.exposeInMainWorld("api", {
     subscribeIpc("config:schema-ready", handler, (_event, data) => [data]),
   onAutoSelectConfig: (handler) =>
     subscribeIpc("auto-select-config", handler, (_event, name) => [name]),
+  appNavigationReady: () => ipcRenderer.send("app-navigation:ready"),
+  appNavigationResult: (payload) =>
+    ipcRenderer.send("app-navigation:result", payload),
+  onAppNavigationOpen: (handler) =>
+    subscribeIpc("app-navigation:open", handler, (_event, data) => [data]),
+  onAppNavigationError: (handler) =>
+    subscribeIpc("app-navigation:error", handler, (_event, data) => [data]),
   getBootStatus: () => ipcRenderer.invoke("boot:status"),
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
   bootOverlayHidden: () => ipcRenderer.send("boot:overlay-hidden"),
@@ -793,6 +834,7 @@ contextBridge.exposeInMainWorld("electron", {
         "folders:block",
         "folders:unblock",
         "config:blacklist",
+        "blacklist:add-manual",
         "saveConfig",
         "loadConfigs",
         "selectFolder",
@@ -905,7 +947,11 @@ contextBridge.exposeInMainWorld("folders", {
   setLinuxWindowsPrefix: (prefix) => ipcRenderer.invoke("folders:set-linux-windows-prefix", prefix),
   add: (dirPath) => ipcRenderer.invoke("folders:add", dirPath),
   remove: (dirPath) => ipcRenderer.invoke("folders:remove", dirPath),
-  rescan: () => ipcRenderer.invoke("folders:rescan"),
+  rescan: (selectedPaths = null) =>
+    ipcRenderer.invoke(
+      "folders:rescan",
+      Array.isArray(selectedPaths) ? { selectedPaths } : null,
+    ),
   block: (dirPath) => ipcRenderer.invoke("folders:block", dirPath),
   unblock: (dirPath) => ipcRenderer.invoke("folders:unblock", dirPath),
 });
