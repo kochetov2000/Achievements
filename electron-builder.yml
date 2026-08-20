@@ -3,7 +3,7 @@ productName: Achievements
 copyright: Copyright © 2025 JokerVerse
 npmRebuild: false
 artifactName: ${productName}-Setup-${version}.${ext}
-electronVersion: 43.3.0
+electronVersion: 43.2.0
 afterPack: ./build/afterPack.js
 directories:
     output: dist

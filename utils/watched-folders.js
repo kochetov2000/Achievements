@@ -380,15 +380,7 @@ const DEFAULT_WATCH_ROOTS = (() => {
     })
     .filter(Boolean);
 })();
-const DEFAULT_WATCH_SET = new Set(
-  DEFAULT_WATCH_ROOTS.map((p) => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return p;
-    }
-  }),
-);
+
 const DEFAULT_BLOCKED_ROOTS = (() => {
   if (process.platform !== "win32") return [];
   const systemIgnores = [
@@ -481,6 +473,8 @@ module.exports = function makeWatchedFolders({
   const deferredSeedActiveConfigs = new Set(); // config names currently seeding
   const steamOfficialSeedOnlyLogged = new Set(); // stats dirs logged once for root-only mode
   const strictRootSeedOnlyLogged = new Set(); // strict roots logged once for root-only mode
+  let watchRoots = [];
+
   const RECENT_OBSERVED_GENERATION_TTL_MS = 8000;
   let deferredSeedPumpTimer = null;
   let deferredSeedPumpRunning = false;
@@ -512,6 +506,31 @@ module.exports = function makeWatchedFolders({
   let cacheMetaLoaded = false;
   let cacheMetaDirty = false;
   let cacheMetaSaveTimer = null;
+
+  // --- prefs helpers ---
+  function readPrefsSafe() {
+    try {
+      return fs.existsSync(preferencesPath)
+        ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  watchRoots = IS_WINDOWS ? 
+  DEFAULT_WATCH_ROOTS :
+  DEFAULT_WATCH_ROOTS.map(p => path.join(readPrefsSafe().prefix, p))
+  
+  const DEFAULT_WATCH_SET = new Set(
+    watchRoots.map((p) => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return p;
+      }
+    }),
+  );
 
   function loadCacheMetaOnce() {
     if (cacheMetaLoaded) return;
@@ -2000,7 +2019,7 @@ module.exports = function makeWatchedFolders({
     }
   }
 
-  // --- prefs helpers ---
+    // --- prefs helpers ---
   function readPrefsSafe() {
     try {
       return fs.existsSync(preferencesPath)
@@ -2258,7 +2277,7 @@ module.exports = function makeWatchedFolders({
     } = options || {};
     const candidateRoots = normalizeOnboardingCandidateRoots(discovered);
     if (muteAllDefaultRoots) {
-      for (const root of DEFAULT_WATCH_ROOTS) {
+      for (const root of watchRoots) {
         const normalized = normalizePrefPath(root);
         if (normalized) candidateRoots.add(normalized);
       }
@@ -2549,7 +2568,7 @@ module.exports = function makeWatchedFolders({
 
     const seen = new Map();
     [
-      ...DEFAULT_WATCH_ROOTS,
+      ...watchRoots,
       ...userFolders,
       ...userBlockedFolders
         .map(normalizePrefPath)
@@ -11275,24 +11294,10 @@ module.exports = function makeWatchedFolders({
     if (IS_WINDOWS) return;
 
     watchRoots = DEFAULT_WATCH_ROOTS.map(p => path.join(prefix, p));
-    watchSet = new Set(watchRoots.map((p) => {
-      try {
-        return fs.realpathSync(p);
-      } catch {
-        return p;
-      }
-    }));
   }
 
   if (IS_WINDOWS) {
     watchRoots = DEFAULT_WATCH_ROOTS;
-    watchSet = new Set(watchRoots.map((p) => {
-      try {
-        return fs.realpathSync(p);
-      } catch {
-        return p;
-      }
-    }));
   } else {
     const prefix = readPrefsSafe().prefix;
     if (prefix) {
