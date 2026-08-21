@@ -481,6 +481,11 @@ contextBridge.exposeInMainWorld("api", {
   loadConfigs: () => ipcRenderer.invoke("loadConfigs"),
   loadDashboardSummary: () => ipcRenderer.invoke("dashboard:summary"),
   selectFolder: () => ipcRenderer.invoke("selectFolder"),
+  selectScreenshotFolder: () => ipcRenderer.invoke("selectScreenshotFolder"),
+  getDefaultScreenshotFolder: () =>
+    ipcRenderer.invoke("getDefaultScreenshotFolder"),
+  selectRecordFolder: () => ipcRenderer.invoke("selectRecordFolder"),
+  getDefaultRecordFolder: () => ipcRenderer.invoke("getDefaultRecordFolder"),
   deleteConfig: (configName, options = {}) => {
     if (configName && typeof configName === "object") {
       return ipcRenderer.invoke("delete-config", configName);
@@ -492,12 +497,18 @@ contextBridge.exposeInMainWorld("api", {
   },
   clearActiveConfig: (payload = {}) =>
     ipcRenderer.invoke("config:clear-active", payload),
+  getActiveConfigSelection: () =>
+    ipcRenderer.invoke("config:get-active-selection"),
   blacklistConfig: (payload) => ipcRenderer.invoke("config:blacklist", payload),
   addManualBlacklistedAppIds: (appids) =>
     ipcRenderer.invoke("blacklist:add-manual", { appids }),
   getBlacklist: () => ipcRenderer.invoke("blacklist:list"),
   resetBlacklist: () => ipcRenderer.invoke("blacklist:reset"),
-  isAppIdBlacklisted: (appid) => ipcRenderer.invoke("blacklist:check", appid),
+  isAppIdBlacklisted: (appid, platform = null) =>
+    ipcRenderer.invoke(
+      "blacklist:check",
+      appid && typeof appid === "object" ? appid : { appid, platform },
+    ),
   getConfigByAppId: (appid) => ipcRenderer.invoke("config:get-by-appid", appid),
 
   // Achievements loading

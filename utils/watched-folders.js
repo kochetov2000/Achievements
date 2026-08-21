@@ -4,6 +4,10 @@ const fsp = require("fs/promises");
 const path = require("path");
 const chokidar = require("chokidar");
 const { createLogger } = require("./logger");
+const {
+  readJsonWithBackupSync,
+  writeJsonAtomicSync,
+} = require("./atomic-json-store");
 const { normalizePlatform } = require("./config-platform-migrator");
 const {
   buildBlacklistConfigKey,
@@ -41,7 +45,7 @@ const {
 } = require("./steam-appcache");
 const { steamId64ToAccountId } = require("./steam-local-users");
 const { parsePs4TrophySetDir } = require("./shadps4-trophy");
-const { sanitizeConfigName } = require("./playtime-store");
+const { sanitizeConfigName } = require("./config-name");
 const {
   clearLumaPlayReadCache,
   readLumaPlayAchievementsSnapshot,
@@ -76,6 +80,29 @@ const {
   normalizeAbsolutePath,
   validateAppIdDirectoryTarget,
 } = require("./config-deletion-paths");
+const {
+  MARKERPATCH_APP_ID,
+  detectMarkerPatchRoot,
+  ensureMarkerPatchConfig,
+  getMarkerPatchGamePath,
+  getMarkerPatchStateFile,
+  isMarkerPatchConfig,
+  normalizePathForComparison: normalizeMarkerPatchPath,
+  readMarkerPatchSnapshot,
+} = require("./markerpatch");
+const {
+  MADNESSPATCH_APP_ID,
+  detectMadnessPatchRoot,
+  ensureMadnessPatchConfig,
+  getMadnessPatchCandidateRoots,
+  getMadnessPatchCheckpointRoot,
+  getMadnessPatchGamePath,
+  isMadnessPatchConfig,
+  listMadnessPatchStateFiles,
+  normalizePathForComparison: normalizeMadnessPatchPath,
+  readMadnessPatchSnapshot,
+} = require("./madnesspatch");
+const { createAdaptivePathWatcher } = require("./adaptive-path-watcher");
 const GAMEPLAY_DB_WAL_NAME = `${GAMEPLAY_DB_NAME}-wal`;
 const GAMEPLAY_DB_SHM_NAME = `${GAMEPLAY_DB_NAME}-shm`;
 
@@ -452,14 +479,14 @@ module.exports = function makeWatchedFolders({
   let blockedFoldersCache = null;
   const persistPreferences =
     typeof updatePreferences === "function" ? updatePreferences : null;
-  const justUnblocked = new Set(); // appids recently removed from blacklist
+  const justUnblocked = new Set(); // legacy/global AppID-wide unblock suppression
+  const justUnblockedConfigs = new Set(); // exact config names recently unblocked
   const platinumNotified = new Set();
   const platinumNotifiedByApp = new Set();
   const tenokeIds = new Set();
   const persistedTenoke = new Set();
   const seededInitialConfigs = new Set();
   const initialNotifyPromotedConfigs = new Set();
-  const autoSelectedConfigs = new Set();
   const tenokeRelinkedConfigs = new Set();
   const pendingAutoSelect = new Set();
   const autoSelectTimers = new Map();
@@ -482,6 +509,23 @@ module.exports = function makeWatchedFolders({
   let deferredSeedOverlayHiddenSeenAt = 0;
   let deferredSeedOverlayWaitStartedAt = 0;
   let deferredSeedOverlayWaitWarned = false;
+
+  function resetPlatinumState(options = {}) {
+    const rawConfigName = String(options?.configName || "").trim();
+    const configName = rawConfigName ? sanitizeConfigName(rawConfigName) : "";
+    const appid = String(options?.appid || "").trim();
+    const removedConfig = configName
+      ? platinumNotified.delete(configName)
+      : false;
+    const removedApp = appid ? platinumNotifiedByApp.delete(appid) : false;
+    watcherLogger.info("platinum-state:reset", {
+      config: configName || null,
+      appid: appid || null,
+      removedConfig,
+      removedApp,
+    });
+    return { removedConfig, removedApp };
+  }
 
   const cacheMetaPath = (() => {
     try {
@@ -566,30 +610,75 @@ module.exports = function makeWatchedFolders({
           version: 1,
           files: Object.fromEntries(cacheMeta),
         };
-        await fsp.mkdir(path.dirname(cacheMetaPath), { recursive: true });
-        await fsp.writeFile(cacheMetaPath, JSON.stringify(payload, null, 2));
+        writeJsonAtomicSync(cacheMetaPath, payload);
       } catch {}
     }, 500);
   }
 
-  function cancelAutoSelectForApp(appid) {
+  function cancelAutoSelectForMeta(meta) {
+    if (!meta?.name) return;
+    pendingAutoSelect.delete(meta.name);
+    autoSelectEmitted.delete(meta.name);
+    suppressAutoSelectByConfig.add(meta.name);
+    const timer = autoSelectTimers.get(meta.name);
+    if (timer) {
+      clearTimeout(timer);
+      autoSelectTimers.delete(meta.name);
+    }
+  }
+
+  function cancelAutoSelectForApp(appid, platform = null) {
+    const normalizedPlatform = platform ? normalizePlatform(platform) : null;
     const metas = getConfigMetas(appid);
     for (const meta of metas) {
-      if (!meta?.name) continue;
-      pendingAutoSelect.delete(meta.name);
-      autoSelectEmitted.delete(meta.name);
-      suppressAutoSelectByConfig.add(meta.name);
-      const t = autoSelectTimers.get(meta.name);
-      if (t) {
-        clearTimeout(t);
-        autoSelectTimers.delete(meta.name);
+      if (
+        normalizedPlatform &&
+        normalizePlatform(meta?.platform) !== normalizedPlatform
+      ) {
+        continue;
       }
+      cancelAutoSelectForMeta(meta);
+    }
+  }
+
+  function isRecentlyUnblocked(appid, meta = null) {
+    return (
+      justUnblocked.has(String(appid || "")) ||
+      (!!meta?.name && justUnblockedConfigs.has(meta.name))
+    );
+  }
+
+  function isAutoSelectSuppressedForMeta(appid, meta = null) {
+    return (
+      suppressAutoSelect.has(String(appid || "")) ||
+      (!!meta?.name && suppressAutoSelectByConfig.has(meta.name))
+    );
+  }
+
+  function releaseUnblockSuppression(appid, meta = null) {
+    const appidKey = String(appid || "");
+    if (appidKey) {
+      suppressAutoSelect.delete(appidKey);
+      justUnblocked.delete(appidKey);
+    }
+    if (meta?.name) {
+      suppressAutoSelectByConfig.delete(meta.name);
+      justUnblockedConfigs.delete(meta.name);
     }
   }
 
   function getConfigMetas(appid) {
-    const list = configIndex.get(String(appid));
-    return Array.isArray(list) ? list : [];
+    const rawKey = String(appid || "");
+    const direct = configIndex.get(rawKey);
+    if (Array.isArray(direct)) return direct;
+    const normalizedKey = normalizeAppIdValue(rawKey);
+    if (!normalizedKey) return [];
+    const matches = [];
+    for (const [indexedAppId, metas] of configIndex.entries()) {
+      if (normalizeAppIdValue(indexedAppId) !== normalizedKey) continue;
+      if (Array.isArray(metas)) matches.push(...metas);
+    }
+    return matches;
   }
 
   function getPs4ConfigMetasByNpCommId(npcommid) {
@@ -888,16 +977,11 @@ module.exports = function makeWatchedFolders({
       watcherLogger.info("auto-select:skip-already-emitted", { config: name });
       return;
     }
-    if (autoSelectedConfigs.has(name)) {
-      watcherLogger.info("auto-select:skip-already-active", { config: name });
-      return;
-    }
     const now = Date.now();
     const last = lastAutoSelectTs.get(name) || 0;
     if (now - last < 1200) return; // throttle duplicate emits
     if (isConfigActive?.(name)) {
       pendingAutoSelect.delete(name);
-      autoSelectedConfigs.add(name);
       autoSelectEmitted.delete(name);
       watcherLogger.info("auto-select:skip-active", { config: name });
       return;
@@ -2021,13 +2105,11 @@ module.exports = function makeWatchedFolders({
 
     // --- prefs helpers ---
   function readPrefsSafe() {
-    try {
-      return fs.existsSync(preferencesPath)
-        ? JSON.parse(fs.readFileSync(preferencesPath, "utf8"))
-        : {};
-    } catch {
-      return {};
-    }
+    const result = readJsonWithBackupSync(preferencesPath, {
+      backup: true,
+      fallback: {},
+    });
+    return result.value && typeof result.value === "object" ? result.value : {};
   }
   function getPreferredSteamOfficialAccountId(sourcePrefs = null) {
     const prefs =
@@ -2065,7 +2147,7 @@ module.exports = function makeWatchedFolders({
       }
       const current = readPrefsSafe();
       const merged = { ...current, ...(patch || {}) };
-      fs.writeFileSync(preferencesPath, JSON.stringify(merged, null, 2));
+      writeJsonAtomicSync(preferencesPath, merged, { backup: true });
       return merged;
     } catch {
       return readPrefsSafe();
@@ -2633,9 +2715,10 @@ module.exports = function makeWatchedFolders({
         return stored;
       }
       const cur = readPrefsSafe();
-      fs.writeFileSync(
+      writeJsonAtomicSync(
         preferencesPath,
-        JSON.stringify({ ...cur, watchedFolders: uniq }, null, 2),
+        { ...cur, watchedFolders: uniq },
+        { backup: true },
       );
       return uniq;
     } catch (e) {
@@ -2665,9 +2748,10 @@ module.exports = function makeWatchedFolders({
         persistPreferences({ watchedFolders: next });
       } else {
         const prefs = readPrefsSafe();
-        fs.writeFileSync(
+        writeJsonAtomicSync(
           preferencesPath,
-          JSON.stringify({ ...prefs, watchedFolders: next }, null, 2),
+          { ...prefs, watchedFolders: next },
+          { backup: true },
         );
       }
       stopFolderWatcher(oldNorm);
@@ -2718,6 +2802,7 @@ module.exports = function makeWatchedFolders({
     if (!normalized) return false;
     const state = currentState || getBlacklistState();
     if (state?.appIds?.has(normalized)) return true;
+    if (!String(platform || "").trim()) return false;
     const configKey = buildBlacklistConfigKey(normalized, platform);
     return configKey ? state?.configKeys?.has(configKey) === true : false;
   }
@@ -4156,9 +4241,10 @@ module.exports = function makeWatchedFolders({
         return getBlockedFoldersSet();
       }
       const prefs = readPrefsSafe();
-      fs.writeFileSync(
+      writeJsonAtomicSync(
         preferencesPath,
-        JSON.stringify({ ...prefs, blockedWatchedFolders: uniq }, null, 2),
+        { ...prefs, blockedWatchedFolders: uniq },
+        { backup: true },
       );
       blockedFoldersCache = null;
       return getBlockedFoldersSet();
@@ -4405,6 +4491,29 @@ module.exports = function makeWatchedFolders({
         emu: normalizeEmuValue(data?.emu),
         save_path: data?.save_path || null,
         config_path: data?.config_path || null,
+        game_path:
+          typeof data?.game_path === "string" ? data.game_path : "",
+        markerpatch_game_path:
+          typeof data?.markerpatch_game_path === "string"
+            ? data.markerpatch_game_path
+            : "",
+        markerpatch_state_file:
+          typeof data?.markerpatch_state_file === "string"
+            ? data.markerpatch_state_file
+            : "",
+        madnesspatch_game_path:
+          typeof data?.madnesspatch_game_path === "string"
+            ? data.madnesspatch_game_path
+            : "",
+        madnesspatch_checkpoint_root:
+          typeof data?.madnesspatch_checkpoint_root === "string"
+            ? data.madnesspatch_checkpoint_root
+            : "",
+        achievement_source:
+          data?.achievement_source && typeof data.achievement_source === "object"
+            ? data.achievement_source
+            : null,
+        native_platinum: data?.native_platinum === true,
         trophy_path:
           typeof data?.trophy_path === "string" ? data.trophy_path : "",
         shadps4_npcommid:
@@ -4638,6 +4747,13 @@ module.exports = function makeWatchedFolders({
         ).trim();
       if (shadPs4UserId) parts.push(`user:${shadPs4UserId}`);
     }
+    if (platform === "madnesspatch") {
+      const stateFile = String(options?.filePath || "").trim();
+      if (stateFile) {
+        const profileName = path.basename(path.dirname(stateFile));
+        if (profileName) parts.push(`profile:${profileName.toLowerCase()}`);
+      }
+    }
     return parts.join("::");
   }
 
@@ -4762,6 +4878,15 @@ module.exports = function makeWatchedFolders({
   function getSaveWatchTargets(meta) {
     const out = new Set();
     if (isLumaPlayMeta(meta)) return [];
+
+    if (isMarkerPatchConfig(meta)) {
+      const stateFile = getMarkerPatchStateFile(meta);
+      return stateFile ? [stateFile] : [];
+    }
+    if (isMadnessPatchConfig(meta)) {
+      const checkpointRoot = getMadnessPatchCheckpointRoot(meta);
+      return checkpointRoot ? [checkpointRoot] : [];
+    }
     if (!meta?.save_path) return [];
 
     if (isXeniaMeta(meta)) {
@@ -4905,6 +5030,25 @@ module.exports = function makeWatchedFolders({
     return Array.from(out);
   }
 
+  function isExpectedMadnessPatchStateFile(meta, filePath) {
+    const checkpointRoot = getMadnessPatchCheckpointRoot(meta);
+    if (!checkpointRoot || !filePath) return false;
+    const relative = path.relative(checkpointRoot, filePath);
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return false;
+    }
+    const segments = relative.split(path.sep).filter(Boolean);
+    return (
+      segments.length === 2 &&
+      segments[1].toLowerCase() === "achievements.txt"
+    );
+  }
+
   const evalDebounce = new Map(); // appid -> timeout
   const fileHitCooldown = new Map();
   const bootDashDebounce = { t: null, pending: false };
@@ -4917,6 +5061,7 @@ module.exports = function makeWatchedFolders({
       isAddEvent = false,
       lumaPlayReadCache = null,
       preserveUnblockAutoSelectSuppression = false,
+      seedOnly = false,
     } = opts || {};
     const isLumaPlay = isLumaPlayMeta(meta);
     if (!filePath && !isLumaPlay) return;
@@ -4929,6 +5074,8 @@ module.exports = function makeWatchedFolders({
     const isGogOfficial = isGogOfficialMeta(meta);
     const isUbisoftOfficial = isUbisoftOfficialMeta(meta);
     const isEaOfficial = isEaOfficialMeta(meta);
+    const isMarkerPatch = isMarkerPatchConfig(meta);
+    const isMadnessPatch = isMadnessPatchConfig(meta);
     if (isLumaPlay) {
       // Registry-backed source; no file suffix checks.
     } else if (isXenia) {
@@ -4949,6 +5096,23 @@ module.exports = function makeWatchedFolders({
       if (!base.endsWith(".bin") || !base.startsWith("usergamestats_")) return;
       const appidStr = String(meta?.appid || appid || "").toLowerCase();
       if (appidStr && !base.endsWith(`_${appidStr}.bin`)) return;
+    } else if (isMarkerPatch) {
+      const expectedStateFile = getMarkerPatchStateFile(meta);
+      if (
+        base !== "settings.txt" ||
+        !expectedStateFile ||
+        normalizePrefPath(filePath).toLowerCase() !==
+          normalizePrefPath(expectedStateFile).toLowerCase()
+      ) {
+        return;
+      }
+    } else if (isMadnessPatch) {
+      if (
+        base !== "achievements.txt" ||
+        !isExpectedMadnessPatchStateFile(meta, filePath)
+      ) {
+        return;
+      }
     } else {
       if (
         base === "stats.ini" &&
@@ -5029,9 +5193,16 @@ module.exports = function makeWatchedFolders({
       }
     }
     let shouldSeed =
-      typeof onSeedCache === "function" && !lastSnapshot.has(snapKey);
+      seedOnly === true ||
+      (typeof onSeedCache === "function" && !lastSnapshot.has(snapKey));
     // Tenoke: if the file appears after boot (add event), do not seed it so notifications can still fire
-    if (shouldSeed && meta.__tenoke && isAddEvent && !bootMode) {
+    if (
+      shouldSeed &&
+      seedOnly !== true &&
+      meta.__tenoke &&
+      isAddEvent &&
+      !bootMode
+    ) {
       shouldSeed = false;
     }
     const isActiveConfig = !!isConfigActive?.(meta.name);
@@ -5182,6 +5353,23 @@ module.exports = function makeWatchedFolders({
         parseOk = false;
         cur = prev;
       }
+    } else if (isMarkerPatch) {
+      const parsed = readMarkerPatchSnapshot(filePath, prev);
+      if (parsed.valid) {
+        cur = parsed.snapshot;
+      } else {
+        parseOk = false;
+        cur = prev;
+      }
+    } else if (isMadnessPatch) {
+      effectiveSnapshotSavePath = filePath;
+      const parsed = readMadnessPatchSnapshot(filePath, prev);
+      if (parsed.valid) {
+        cur = parsed.snapshot;
+      } else {
+        parseOk = false;
+        cur = prev;
+      }
     } else {
       cur = loadAchievementsFromSaveFile(path.dirname(filePath), prev, {
         configMeta: meta,
@@ -5221,16 +5409,8 @@ module.exports = function makeWatchedFolders({
     }
 
     if (!preserveUnblockAutoSelectSuppression) {
-      if (suppressAutoSelect.has(String(appid))) {
-        // Drop suppression once we detect a real post-unblock change.
-        suppressAutoSelect.delete(String(appid));
-      }
-      if (meta?.name && suppressAutoSelectByConfig.has(meta.name)) {
-        suppressAutoSelectByConfig.delete(meta.name);
-      }
-      if (justUnblocked.has(String(appid))) {
-        justUnblocked.delete(String(appid));
-      }
+      // Drop only this config's suppression after a real post-unblock change.
+      releaseUnblockSuppression(appid, meta);
     }
 
     const isFirstSeed =
@@ -5305,16 +5485,23 @@ module.exports = function makeWatchedFolders({
 
       platinumNotified.add(meta.name);
       platinumNotifiedByApp.add(platinumKey);
-      try {
-        onPlatinumComplete?.({
+      if (meta?.native_platinum !== true) {
+        try {
+          onPlatinumComplete?.({
+            appid: String(appid),
+            configName: meta.name,
+            snapshot: cur,
+            savePath: meta.save_path || null,
+            configPath: meta.config_path || null,
+            isActive: isActiveConfig,
+          });
+        } catch {}
+      } else {
+        watcherLogger.info("platinum:native-achievement", {
           appid: String(appid),
-          configName: meta.name,
-          snapshot: cur,
-          savePath: meta.save_path || null,
-          configPath: meta.config_path || null,
-          isActive: isActiveConfig,
+          config: meta?.name || null,
         });
-      } catch {}
+      }
     }
 
     if (pendingAutoSelect.has(meta.name) && isConfigActive?.(meta.name)) {
@@ -5322,7 +5509,14 @@ module.exports = function makeWatchedFolders({
       autoSelectEmitted.delete(meta.name);
     }
     const prevWasEmpty = Object.keys(prev || {}).length === 0;
-    if (!initial && isActiveConfig && !forceEmptyPrev && !prevWasEmpty) {
+    const localPatchWatcherOwnsNotifications = isMarkerPatch || isMadnessPatch;
+    if (
+      !initial &&
+      isActiveConfig &&
+      !localPatchWatcherOwnsNotifications &&
+      !forceEmptyPrev &&
+      !prevWasEmpty
+    ) {
       return false;
     }
     if (shouldSeed) {
@@ -5391,10 +5585,19 @@ module.exports = function makeWatchedFolders({
         });
       }
       if (!becameEarned && !progressChanged) continue;
-      if (becameEarned && (isRpcs3 || isLumaPlay)) {
+      if (
+        becameEarned &&
+        (isRpcs3 || isLumaPlay || isMarkerPatch || isMadnessPatch)
+      ) {
         if (!nowVal.earned_time) nowVal.earned_time = Date.now();
       }
-      if (!initial && isActiveConfig && !forceEmptyPrev && !prevWasEmpty)
+      if (
+        !initial &&
+        isActiveConfig &&
+        !localPatchWatcherOwnsNotifications &&
+        !forceEmptyPrev &&
+        !prevWasEmpty
+      )
         continue;
       touched = true;
       const cfgEntry = getConfigEntry(meta, achKey);
@@ -5416,7 +5619,7 @@ module.exports = function makeWatchedFolders({
         });
         continue;
       }
-      if (!initial && isActiveConfig) {
+      if (!initial && isActiveConfig && !localPatchWatcherOwnsNotifications) {
         continue;
       }
       if (becameEarned && onEarned) {
@@ -5475,7 +5678,12 @@ module.exports = function makeWatchedFolders({
       if (
         progressChanged &&
         onProgress &&
-        !(isConfigActive?.(meta.name) && !forceEmptyPrev && !prevWasEmpty)
+        !(
+          isConfigActive?.(meta.name) &&
+          !localPatchWatcherOwnsNotifications &&
+          !forceEmptyPrev &&
+          !prevWasEmpty
+        )
       ) {
         watcherLogger.info("progress-detected", {
           appid: String(appid),
@@ -5604,8 +5812,8 @@ module.exports = function makeWatchedFolders({
         } catch {}
         if (
           !bootMode &&
-          !justUnblocked.has(String(entry.appid)) &&
-          !suppressAutoSelect.has(String(entry.appid))
+          !isRecentlyUnblocked(entry.appid, entry.meta) &&
+          !isAutoSelectSuppressedForMeta(entry.appid, entry.meta)
         ) {
           setTimeout(() => enqueueAutoSelect(entry.meta), 0);
         }
@@ -5709,8 +5917,8 @@ module.exports = function makeWatchedFolders({
         xeniaTargetBeforeSeed || pickExistingSeedTargetForMeta(meta, candidates);
       pendingInitialNotify.delete(meta.name);
       if (existingTarget) {
-        const fromUnblock = justUnblocked.has(id);
         const preferredMeta = pickMetaForPath(id, existingTarget) || meta;
+        const fromUnblock = isRecentlyUnblocked(id, preferredMeta);
         setTimeout(() => {
           (async () => {
             watcherLogger.info("initial-notify:attempt", {
@@ -5774,7 +5982,7 @@ module.exports = function makeWatchedFolders({
               !bootMode &&
               !isConfigActive?.(preferredMeta.name) &&
               !pendingAutoSelect.has(preferredMeta.name) &&
-              !suppressAutoSelect.has(String(id))
+              !isAutoSelectSuppressedForMeta(id, preferredMeta)
             ) {
               enqueueAutoSelect(preferredMeta);
             }
@@ -5958,10 +6166,176 @@ module.exports = function makeWatchedFolders({
     const deferInitialSeed = options.deferInitialSeed === true;
     const deferLumaPlayPolling = options.deferLumaPlayPolling === true;
     const isLumaPlay = isLumaPlayMeta(meta);
-    if (!meta?.save_path && !isLumaPlay) return;
+    const isMarkerPatch = isMarkerPatchConfig(meta);
+    const isMadnessPatch = isMadnessPatchConfig(meta);
+    if (
+      !meta?.save_path &&
+      !isLumaPlay &&
+      !isMarkerPatch &&
+      !isMadnessPatch
+    )
+      return;
     const appid = String(meta.appid);
     const bucket = ensureWatcherBucket(appid);
     if (bucket.has(meta.name)) return;
+
+    if (isMarkerPatch || isMadnessPatch) {
+      const targetPath = isMarkerPatch
+        ? getMarkerPatchStateFile(meta)
+        : getMadnessPatchCheckpointRoot(meta);
+      if (!targetPath) return;
+      let operation = Promise.resolve();
+      const enqueueOperation = (task) => {
+        operation = operation.then(task, task).catch((error) => {
+          watcherLogger.warn("local-patch:evaluate-failed", {
+            appid,
+            config: meta?.name || null,
+            platform: meta?.platform || null,
+            error: error?.message || String(error),
+          });
+        });
+        return operation;
+      };
+      const evaluateLocalPatchFile = async (
+        filePath,
+        initial,
+        useCachedBaseline = false,
+      ) => {
+        if (!filePath || !fs.existsSync(filePath)) return false;
+        if (initial && useCachedBaseline && typeof getCachedSnapshot === "function") {
+          const snapKey = makeSnapshotKey(meta, appid, { filePath });
+          if (!lastSnapshot.has(snapKey)) {
+            try {
+              const cached = getCachedSnapshot(
+                meta?.name || appid,
+                meta?.platform || null,
+                { savePath: filePath, filePath, appid },
+              );
+              if (
+                cached &&
+                typeof cached === "object" &&
+                !Array.isArray(cached)
+              ) {
+                lastSnapshot.set(snapKey, cached);
+              }
+            } catch {}
+          }
+        }
+        let result = await evaluateFile(appid, meta, filePath, {
+          initial: initial === true,
+          retry: false,
+          isAddEvent: initial === true,
+          seedOnly: initial === true,
+        });
+        if (result === "__retry__") {
+          await sleep(350);
+          result = await evaluateFile(appid, meta, filePath, {
+            initial: initial === true,
+            retry: true,
+            isAddEvent: initial === true,
+            seedOnly: initial === true,
+          });
+        }
+        broadcastAll("refresh-achievements-table");
+        emitDashboardRefresh();
+        if (result === true) {
+          broadcastAll("achievements:file-updated", {
+            appid,
+            configName: meta?.name || null,
+          });
+          if (
+            !bootMode &&
+            !isRecentlyUnblocked(appid, meta) &&
+            !isAutoSelectSuppressedForMeta(appid, meta)
+          ) {
+            setTimeout(() => enqueueAutoSelect(meta), 0);
+          }
+        }
+        return result;
+      };
+
+      const adaptiveWatcher = createAdaptivePathWatcher({
+        targetPath,
+        targetType: isMadnessPatch ? "directory" : "file",
+        pollIntervalMs: 1000,
+        watcherOptions: {
+          awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
+          depth: isMadnessPatch ? 2 : undefined,
+        },
+        onAvailable: () => {
+          enqueueOperation(async () => {
+            if (isMarkerPatch) {
+              await evaluateLocalPatchFile(targetPath, true, true);
+              watcherLogger.info("markerpatch:state-available", {
+                appid,
+                config: meta?.name || null,
+                stateFile: targetPath,
+              });
+              return;
+            }
+            const states = listMadnessPatchStateFiles(targetPath).reverse();
+            for (let index = 0; index < states.length; index += 1) {
+              await evaluateLocalPatchFile(
+                states[index].filePath,
+                true,
+                index === states.length - 1,
+              );
+            }
+            watcherLogger.info("madnesspatch:checkpoint-available", {
+              appid,
+              config: meta?.name || null,
+              checkpointRoot: targetPath,
+              profiles: states.length,
+            });
+          });
+        },
+        onUnavailable: (_missingPath, state) => {
+          watcherLogger.info("local-patch:state-unavailable", {
+            appid,
+            config: meta?.name || null,
+            platform: meta?.platform || null,
+            targetPath,
+            reason: state?.reason || "missing",
+          });
+        },
+        onEvent: (event, filePath) => {
+          if (event !== "add" && event !== "change") return;
+          if (isMarkerPatch) {
+            if (
+              normalizePrefPath(filePath).toLowerCase() !==
+              normalizePrefPath(targetPath).toLowerCase()
+            ) {
+              return;
+            }
+          } else if (!isExpectedMadnessPatchStateFile(meta, filePath)) {
+            return;
+          }
+          enqueueOperation(() =>
+            evaluateLocalPatchFile(filePath, event === "add"),
+          );
+        },
+        onError: (error, state) => {
+          watcherLogger.warn("local-patch:adaptive-watch-error", {
+            appid,
+            config: meta?.name || null,
+            platform: meta?.platform || null,
+            targetPath,
+            phase: state?.phase || null,
+            error: error?.message || String(error),
+          });
+        },
+      });
+      bucket.set(meta.name, adaptiveWatcher);
+      watcherLogger.info("watch-save-local-patch", {
+        appid,
+        config: meta?.name || null,
+        platform: meta?.platform || null,
+        targetPath,
+        targetType: isMadnessPatch ? "directory" : "file",
+        adaptive: true,
+      });
+      return;
+    }
 
     if (isLumaPlay) {
       if (!isLumaPlayWatcherEnabled()) return;
@@ -6142,7 +6516,7 @@ module.exports = function makeWatchedFolders({
                   if (
                     !bootMode &&
                     evalResult &&
-                    !justUnblocked.has(String(appid))
+                    !isRecentlyUnblocked(appid, meta)
                   ) {
                     const tenokeReady =
                       meta.__tenoke !== true ||
@@ -6222,7 +6596,7 @@ module.exports = function makeWatchedFolders({
       return null;
     };
 
-    if (!hasExistingTarget) {
+    if (!hasExistingTarget && !isMarkerPatchConfig(meta)) {
       const found = locateAndPersistSavePath();
       if (found) {
         const newSavePath = path.dirname(found);
@@ -6407,6 +6781,16 @@ module.exports = function makeWatchedFolders({
           } else {
             return;
           }
+        } else if (isMarkerPatchConfig(meta)) {
+          const expectedStateFile = getMarkerPatchStateFile(meta);
+          if (
+            !expectedStateFile ||
+            normalizePrefPath(filePath).toLowerCase() !==
+              normalizePrefPath(expectedStateFile).toLowerCase()
+          ) {
+            return;
+          }
+          resolvedPath = expectedStateFile;
         } else {
           const parts = filePath.split(path.sep).map((p) => p.toLowerCase());
           const detected = [...parts]
@@ -6484,8 +6868,8 @@ module.exports = function makeWatchedFolders({
             if (
               !bootMode &&
               tenokeReady &&
-              !justUnblocked.has(String(appid)) &&
-              !suppressAutoSelect.has(String(appid))
+              !isRecentlyUnblocked(appid, meta) &&
+              !isAutoSelectSuppressedForMeta(appid, meta)
             ) {
               // defer to next tick to allow notifications to emit before activation
               setTimeout(() => enqueueAutoSelect(meta), 0);
@@ -6495,8 +6879,8 @@ module.exports = function makeWatchedFolders({
                 appid: String(appid),
                 bootMode,
                 tenokeReady,
-                justUnblocked: justUnblocked.has(String(appid)),
-                suppressAutoSelect: suppressAutoSelect.has(String(appid)),
+                justUnblocked: isRecentlyUnblocked(appid, meta),
+                suppressAutoSelect: isAutoSelectSuppressedForMeta(appid, meta),
               });
             }
           }
@@ -6630,6 +7014,15 @@ module.exports = function makeWatchedFolders({
           candidates.unshift(p);
         }
       }
+    } else if (isMarkerPatchConfig(meta)) {
+      const stateFile = getMarkerPatchStateFile(meta);
+      if (stateFile) {
+        const key = path.normalize(stateFile);
+        if (!seenCandidates.has(key)) {
+          seenCandidates.add(key);
+          candidates.unshift(stateFile);
+        }
+      }
     }
     if (isRpcs3Meta(meta)) {
       const usrPath = resolveTropusrPathForMeta(meta);
@@ -6692,10 +7085,40 @@ module.exports = function makeWatchedFolders({
           continue;
         }
         const savePath = meta?.save_path ? normalize(meta.save_path) : null;
-        if (!savePath) continue;
-        if (isPathBlocked(savePath, blockedFolders)) continue;
+        const markerPatchConfig = isMarkerPatchConfig(meta);
+        const madnessPatchConfig = isMadnessPatchConfig(meta);
+        const localPatchConfig = markerPatchConfig || madnessPatchConfig;
+        const localPatchGamePath = markerPatchConfig
+          ? getMarkerPatchGamePath(meta)
+          : madnessPatchConfig
+            ? getMadnessPatchGamePath(meta)
+            : "";
+        if (
+          markerPatchConfig &&
+          !detectMarkerPatchRoot(localPatchGamePath).detected
+        ) {
+          continue;
+        }
+        if (
+          madnessPatchConfig &&
+          !detectMadnessPatchRoot(localPatchGamePath).detected
+        ) {
+          continue;
+        }
+        const eligibilityPath = localPatchConfig
+          ? normalize(localPatchGamePath)
+          : savePath;
+        if (!eligibilityPath) continue;
+        if (isPathBlocked(eligibilityPath, blockedFolders)) continue;
+        if (
+          localPatchConfig &&
+          savePath &&
+          isPathBlocked(savePath, blockedFolders)
+        ) {
+          continue;
+        }
         const inside = roots.some((root) => {
-          const rel = path.relative(root, savePath);
+          const rel = path.relative(root, eligibilityPath);
           if (!rel) return true; // same directory
           return !rel.startsWith("..") && !path.isAbsolute(rel); // inside subdir
         });
@@ -6909,6 +7332,8 @@ module.exports = function makeWatchedFolders({
     if (!entry || !matchedKey) return false;
 
     folderWatchers.delete(matchedKey);
+    entry.stopped = true;
+    entry.rescanQueued = false;
     clearTimeout(entry.debounce);
     try {
       entry.resolveReady?.(false);
@@ -8111,7 +8536,7 @@ module.exports = function makeWatchedFolders({
       opts.fromBlacklist === true ||
       (Array.isArray(opts.appIdsFromBlacklist) &&
         opts.appIdsFromBlacklist.includes(appid)) ||
-      justUnblocked.has(appid);
+      isRecentlyUnblocked(appid, meta);
 
     // If coming from un-blacklist, preload snapshot from cache to avoid replaying notifications
     const snapKey = makeSnapshotKey(meta, appid);
@@ -8352,6 +8777,12 @@ module.exports = function makeWatchedFolders({
               fullSchemaPath: resolveAchievementsSchemaPath(meta),
             },
           );
+        } else if (isMarkerPatchConfig(meta)) {
+          const parsed = readMarkerPatchSnapshot(
+            metaPath,
+            lastSnapshot.get(snapKey) || {},
+          );
+          snapshot = parsed.valid ? parsed.snapshot : null;
         } else if (isPs4Meta(meta)) {
           let trophyDir = meta?.save_path || "";
           try {
@@ -8475,6 +8906,369 @@ module.exports = function makeWatchedFolders({
     }
   }
 
+  function findMarkerPatchMetaForRoot(rootPath) {
+    const rootKey = normalizeMarkerPatchPath(rootPath);
+    if (!rootKey) return null;
+    for (const metas of configIndex.values()) {
+      for (const meta of metas || []) {
+        if (!isMarkerPatchConfig(meta)) continue;
+        if (normalizeMarkerPatchPath(getMarkerPatchGamePath(meta)) === rootKey) {
+          return meta;
+        }
+      }
+    }
+    return null;
+  }
+
+  function stopMarkerPatchSaveWatcher(meta, reason) {
+    if (!meta?.name || !meta?.appid) return false;
+    const bucket = appidSaveWatchers.get(String(meta.appid));
+    const watcher = bucket instanceof Map ? bucket.get(meta.name) : null;
+    if (!watcher) return false;
+    try {
+      watcher.close();
+    } catch {}
+    bucket.delete(meta.name);
+    if (bucket.size === 0) appidSaveWatchers.delete(String(meta.appid));
+    watcherLogger.info("markerpatch:unwatch-state", {
+      config: meta.name,
+      appid: String(meta.appid),
+      reason: String(reason || "unavailable"),
+    });
+    return true;
+  }
+
+  function findMadnessPatchMetaForRoot(rootPath, detection = null) {
+    const rootKeys = new Set();
+    const addRootKey = (candidate) => {
+      const key = normalizeMadnessPatchPath(candidate);
+      if (key) rootKeys.add(key);
+    };
+    addRootKey(rootPath);
+    addRootKey(detection?.root);
+    try {
+      for (const candidate of getMadnessPatchCandidateRoots(rootPath)) {
+        addRootKey(candidate);
+      }
+    } catch {}
+    if (!rootKeys.size) return null;
+    for (const metas of configIndex.values()) {
+      for (const meta of metas || []) {
+        if (!isMadnessPatchConfig(meta)) continue;
+        if (rootKeys.has(normalizeMadnessPatchPath(getMadnessPatchGamePath(meta)))) {
+          return meta;
+        }
+      }
+    }
+    return null;
+  }
+
+  function stopMadnessPatchSaveWatcher(meta, reason) {
+    if (!meta?.name || !meta?.appid) return false;
+    const bucket = appidSaveWatchers.get(String(meta.appid));
+    const watcher = bucket instanceof Map ? bucket.get(meta.name) : null;
+    if (!watcher) return false;
+    Promise.resolve(watcher.close()).catch(() => {});
+    bucket.delete(meta.name);
+    if (bucket.size === 0) appidSaveWatchers.delete(String(meta.appid));
+    watcherLogger.info("madnesspatch:unwatch-state", {
+      config: meta.name,
+      appid: String(meta.appid),
+      reason: String(reason || "unavailable"),
+    });
+    return true;
+  }
+
+  function detectLocalPatchRootState(rootPath) {
+    const madnessPatchDetection = detectMadnessPatchRoot(rootPath);
+    const markerPatchDetection = detectMarkerPatchRoot(rootPath);
+    const type = madnessPatchDetection.detected
+      ? "madnesspatch"
+      : markerPatchDetection.detected
+        ? "markerpatch"
+        : "";
+    return {
+      type,
+      active: !!type,
+      madnessPatchDetection,
+      markerPatchDetection,
+    };
+  }
+
+  function isLocalPatchSignatureEvent(rootPath, eventPath) {
+    if (!rootPath || !eventPath) return false;
+    let relative = "";
+    try {
+      relative = path.relative(rootPath, eventPath);
+    } catch {
+      return false;
+    }
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return false;
+    }
+    const normalized = relative.split(/[\\/]+/).join("/").toLowerCase();
+    const markerSignatures = new Set([
+      "deadspace2.exe",
+      "markerpatch.ini",
+      "achievements",
+      "achievements/img",
+      "achievements/txt",
+    ]);
+    if (markerSignatures.has(normalized)) return true;
+
+    const madnessCandidatePrefixes = [
+      "",
+      "binaries/win32",
+      "alice2/binaries/win32",
+      "game/alice2/binaries/win32",
+    ];
+    const madnessSignatures = [
+      "alicemadnessreturns.exe",
+      "madnesspatch.ini",
+      "dinput8.dll",
+      "achievements",
+      "achievements/img",
+      "achievements/txt",
+    ];
+    return madnessCandidatePrefixes.some((prefix) =>
+      madnessSignatures.some(
+        (signature) => normalized === (prefix ? `${prefix}/${signature}` : signature),
+      ),
+    );
+  }
+
+  async function handleMadnessPatchRoot(rootPath, opts = {}) {
+    const detection =
+      opts.madnessPatchDetection || detectMadnessPatchRoot(rootPath);
+    const existingMeta = findMadnessPatchMetaForRoot(rootPath, detection);
+    if (!detection.detected) {
+      if (!existingMeta) return { handled: false };
+      if (stopMadnessPatchSaveWatcher(existingMeta, "signature-missing")) {
+        watcherLogger.warn("madnesspatch:signature-missing", {
+          root: normalizePrefPath(rootPath),
+          config: existingMeta.name,
+          signals: detection.signals || null,
+        });
+      }
+      return {
+        handled: false,
+        staleLocalPatch: true,
+        available: false,
+        configName: existingMeta.name,
+      };
+    }
+
+    const blacklistState = getBlacklistState();
+    if (
+      isAppIdBlacklisted(
+        MADNESSPATCH_APP_ID,
+        "madnesspatch",
+        blacklistState,
+      )
+    ) {
+      if (existingMeta) {
+        stopMadnessPatchSaveWatcher(existingMeta, "blacklisted");
+      }
+      watcherLogger.info("madnesspatch:skip-blacklisted", {
+        root: detection.root,
+        appid: MADNESSPATCH_APP_ID,
+      });
+      return { handled: true, blacklisted: true };
+    }
+
+    if (configDeletionGuard.isSuppressed(MADNESSPATCH_APP_ID)) {
+      watcherLogger.info("madnesspatch:skip-config-deleting", {
+        root: detection.root,
+        appid: MADNESSPATCH_APP_ID,
+      });
+      return { handled: true, configDeleting: true };
+    }
+    const finishGeneration =
+      configDeletionGuard.tryStartGeneration(MADNESSPATCH_APP_ID);
+    if (!finishGeneration) return { handled: true, configDeleting: true };
+
+    try {
+      const documentsPath = (() => {
+        try {
+          return app?.getPath?.("documents") || "";
+        } catch {
+          return "";
+        }
+      })();
+      const prefs = readPrefsSafe();
+      const schemaLanguages = Array.isArray(prefs?.schemaLanguages)
+        ? prefs.schemaLanguages.length
+          ? prefs.schemaLanguages
+          : ["english"]
+        : undefined;
+      const result = ensureMadnessPatchConfig({
+        rootPath: detection.root,
+        configsDir,
+        documentsPath,
+        userProfile: process.env.USERPROFILE || "",
+        schemaLanguages,
+      });
+      await indexExistingConfigsSync();
+      knownAppIds.add(MADNESSPATCH_APP_ID);
+      const meta = findMadnessPatchMetaForRoot(detection.root, detection);
+      if (meta) {
+        attachWatcherForMeta(meta, {
+          suppressInitialNotify: opts.suppressInitialNotify !== false,
+          deferInitialSeed: rescanInProgress.value,
+        });
+      }
+      if (result.created || result.updated || result.schemaUpdated) {
+        broadcastAll("configs:changed");
+        broadcastAll("refresh-achievements-table");
+        emitDashboardRefresh();
+      }
+      const stateFiles = listMadnessPatchStateFiles(result.checkpointRoot);
+      watcherLogger.info("madnesspatch:scan-complete", {
+        root: detection.root,
+        config: result.name,
+        checkpointRoot: result.checkpointRoot || null,
+        checkpointRootExists:
+          !!result.checkpointRoot && fs.existsSync(result.checkpointRoot),
+        profiles: stateFiles.length,
+        created: result.created,
+        updated: result.updated,
+        schemaUpdated: result.schemaUpdated,
+        unchanged: result.unchanged,
+      });
+      return { handled: true, available: true, ...result };
+    } catch (error) {
+      watcherLogger.error("madnesspatch:scan-failed", {
+        root: detection.root || normalizePrefPath(rootPath),
+        error: error?.message || String(error),
+      });
+      notifyWarn(
+        `MadnessPatch scan failed for "${detection.root || rootPath}": ${
+          error?.message || String(error)
+        }`,
+      );
+      return { handled: true, available: false, error };
+    } finally {
+      finishGeneration();
+    }
+  }
+
+  async function handleMarkerPatchRoot(rootPath, opts = {}) {
+    const detection = opts.markerPatchDetection || detectMarkerPatchRoot(rootPath);
+    const existingMeta = findMarkerPatchMetaForRoot(rootPath);
+    if (!detection.detected) {
+      if (!existingMeta) return { handled: false };
+      if (stopMarkerPatchSaveWatcher(existingMeta, "signature-missing")) {
+        watcherLogger.warn("markerpatch:signature-missing", {
+          root: normalizePrefPath(rootPath),
+          config: existingMeta.name,
+          signals: detection.signals || null,
+        });
+      }
+      return {
+        handled: false,
+        staleLocalPatch: true,
+        available: false,
+        configName: existingMeta.name,
+      };
+    }
+
+    const blacklistState = getBlacklistState();
+    if (
+      isAppIdBlacklisted(
+        MARKERPATCH_APP_ID,
+        "markerpatch",
+        blacklistState,
+      )
+    ) {
+      if (existingMeta) stopMarkerPatchSaveWatcher(existingMeta, "blacklisted");
+      watcherLogger.info("markerpatch:skip-blacklisted", {
+        root: detection.root,
+        appid: MARKERPATCH_APP_ID,
+      });
+      return { handled: true, blacklisted: true };
+    }
+
+    if (configDeletionGuard.isSuppressed(MARKERPATCH_APP_ID)) {
+      watcherLogger.info("markerpatch:skip-config-deleting", {
+        root: detection.root,
+        appid: MARKERPATCH_APP_ID,
+      });
+      return { handled: true, configDeleting: true };
+    }
+    const finishGeneration =
+      configDeletionGuard.tryStartGeneration(MARKERPATCH_APP_ID);
+    if (!finishGeneration) {
+      return { handled: true, configDeleting: true };
+    }
+
+    try {
+      const appData = (() => {
+        try {
+          return app?.getPath?.("appData") || "";
+        } catch {
+          return "";
+        }
+      })();
+      const markerPrefs = readPrefsSafe();
+      const schemaLanguages = Array.isArray(markerPrefs?.schemaLanguages)
+        ? markerPrefs.schemaLanguages.length
+          ? markerPrefs.schemaLanguages
+          : ["english"]
+        : undefined;
+      const result = ensureMarkerPatchConfig({
+        rootPath: detection.root,
+        configsDir,
+        localAppData: process.env.LOCALAPPDATA || "",
+        appData,
+        schemaLanguages,
+      });
+      await indexExistingConfigsSync();
+      knownAppIds.add(MARKERPATCH_APP_ID);
+      const meta = findMarkerPatchMetaForRoot(detection.root);
+      if (meta) {
+        attachWatcherForMeta(meta, {
+          suppressInitialNotify: opts.suppressInitialNotify !== false,
+          deferInitialSeed: rescanInProgress.value,
+        });
+      }
+
+      if (result.created || result.updated || result.schemaUpdated) {
+        broadcastAll("configs:changed");
+        broadcastAll("refresh-achievements-table");
+        emitDashboardRefresh();
+      }
+      watcherLogger.info("markerpatch:scan-complete", {
+        root: detection.root,
+        config: result.name,
+        stateFile: result.stateFile || null,
+        stateFileExists: !!result.stateFile && fs.existsSync(result.stateFile),
+        created: result.created,
+        updated: result.updated,
+        schemaUpdated: result.schemaUpdated,
+        unchanged: result.unchanged,
+      });
+      return { handled: true, available: true, ...result };
+    } catch (error) {
+      watcherLogger.error("markerpatch:scan-failed", {
+        root: detection.root || normalizePrefPath(rootPath),
+        error: error?.message || String(error),
+      });
+      notifyWarn(
+        `MarkerPatch scan failed for "${detection.root || rootPath}": ${
+          error?.message || String(error)
+        }`,
+      );
+      return { handled: true, available: false, error };
+    } finally {
+      finishGeneration();
+    }
+  }
+
   async function scanRootOnce(rootPath, opts = {}) {
     const suppressInitialNotify = opts.suppressInitialNotify === true;
     const promoteSingleGeneratedInitialNotify =
@@ -8492,6 +9286,20 @@ module.exports = function makeWatchedFolders({
       if (!rootPath || !fs.existsSync(rootPath)) return;
       const blockedFolders = getBlockedFoldersSet();
       if (isPathBlocked(rootPath, blockedFolders)) return;
+      const localPatchState =
+        opts.localPatchState || detectLocalPatchRootState(rootPath);
+      const watchedRootState = folderWatchers.get(normalizeRoot(rootPath));
+      if (watchedRootState) watchedRootState.localPatchState = localPatchState;
+      const madnessPatchResult = await handleMadnessPatchRoot(rootPath, {
+        ...opts,
+        madnessPatchDetection: localPatchState.madnessPatchDetection,
+      });
+      if (madnessPatchResult.handled) return madnessPatchResult;
+      const markerPatchResult = await handleMarkerPatchRoot(rootPath, {
+        ...opts,
+        markerPatchDetection: localPatchState.markerPatchDetection,
+      });
+      if (markerPatchResult.handled) return markerPatchResult;
       const scanScopeRoot = opts.scanScopeRoot
         ? normalizePrefPath(opts.scanScopeRoot)
         : null;
@@ -10254,7 +11062,6 @@ module.exports = function makeWatchedFolders({
   function startFolderWatcher(inputRoot, opts = {}) {
     const { initialScan = true } = opts;
     const root = normalizeRoot(coercePath(inputRoot));
-    const strictRootProfile = getStrictRootProfile(root);
     if (folderWatchers.has(root)) {
       return folderWatchers.get(root)?.readyPromise || Promise.resolve(true);
     }
@@ -10266,6 +11073,10 @@ module.exports = function makeWatchedFolders({
       watcherLogger.info("watch-folder:skip-blocked", { root });
       return Promise.resolve(false);
     }
+    const strictRootProfile = getStrictRootProfile(root);
+    const initialLocalPatchState = detectLocalPatchRootState(root);
+    const markerPatchOwnedRoot = initialLocalPatchState.type === "markerpatch";
+    const madnessPatchOwnedRoot = initialLocalPatchState.type === "madnesspatch";
 
     const watcher = chokidar.watch(root, {
       persistent: true,
@@ -10273,25 +11084,44 @@ module.exports = function makeWatchedFolders({
       ignored: (candidatePath) =>
         candidatePath !== root && isPathBlocked(candidatePath),
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-      depth: strictRootProfile ? STRICT_ROOT_WATCH_DEPTH : 6,
+      depth: madnessPatchOwnedRoot
+        ? 7
+        : markerPatchOwnedRoot
+          ? 2
+          : strictRootProfile
+            ? STRICT_ROOT_WATCH_DEPTH
+            : 6,
       ignorePermissionErrors: true,
     });
     let resolveReady = null;
     const readyPromise = new Promise((resolve) => {
       resolveReady = resolve;
     });
-    const state = { watcher, debounce: null, readyPromise, resolveReady };
+    const state = {
+      watcher,
+      debounce: null,
+      readyPromise,
+      resolveReady,
+      localPatchState: initialLocalPatchState,
+      rescanQueued: false,
+      stopped: false,
+    };
     folderWatchers.set(root, state);
     watcherLogger.info("watch-folder", { root, initialScan });
 
     const schedule = () => {
+      if (state.stopped) return;
       clearTimeout(state.debounce);
       state.debounce = setTimeout(async () => {
+        if (state.stopped) return;
         if (!bootOnboardingGateOpen) {
           markBootOnboardingDirtyRoot(root, "debounced-scan");
           return;
         }
-        if (activeRoots.has(root)) return;
+        if (activeRoots.has(root)) {
+          state.rescanQueued = true;
+          return;
+        }
         activeRoots.add(root);
         try {
           if (!fs.existsSync(root)) {
@@ -10299,13 +11129,38 @@ module.exports = function makeWatchedFolders({
             stopFolderWatcher(root);
             return;
           }
-          await scanRootOnce(root);
+          await scanRootOnce(root, { localPatchState: state.localPatchState });
         } catch (e) {
           notifyWarn(`Watch rescan failed for "${root}": ${e.message}`);
         } finally {
           activeRoots.delete(root);
+          if (state.rescanQueued && !state.stopped) {
+            state.rescanQueued = false;
+            schedule();
+          }
         }
       }, 300);
+    };
+
+    const routeLocalPatchEvent = (eventPath) => {
+      const signatureEvent = isLocalPatchSignatureEvent(root, eventPath);
+      const previous = state.localPatchState;
+      if (signatureEvent) {
+        state.localPatchState = detectLocalPatchRootState(root);
+        if (
+          previous?.type !== state.localPatchState.type ||
+          previous?.active !== state.localPatchState.active
+        ) {
+          watcherLogger.info("local-patch:root-state-changed", {
+            root,
+            previousType: previous?.type || null,
+            currentType: state.localPatchState.type || null,
+            active: state.localPatchState.active,
+          });
+        }
+      }
+      if (signatureEvent || state.localPatchState.active) schedule();
+      return state.localPatchState.active;
     };
 
     const getPendingAlternatePlatformForEvent = (appid, eventPath, meta) => {
@@ -10484,8 +11339,8 @@ module.exports = function makeWatchedFolders({
               });
               if (
                 !bootMode &&
-                !justUnblocked.has(String(meta.appid)) &&
-                !suppressAutoSelect.has(String(meta.appid))
+                !isRecentlyUnblocked(meta.appid, meta) &&
+                !isAutoSelectSuppressedForMeta(meta.appid, meta)
               ) {
                 setTimeout(() => enqueueAutoSelect(meta), 0);
               }
@@ -10524,6 +11379,7 @@ module.exports = function makeWatchedFolders({
           markBootOnboardingDirtyRoot(root, "watch:add");
           return;
         }
+        if (routeLocalPatchEvent(filePath)) return;
         if (await handleUbisoftOfficialRootFileEvent(root, filePath)) {
           return;
         }
@@ -10733,8 +11589,8 @@ module.exports = function makeWatchedFolders({
         if (
           !bootMode &&
           tenokeReady &&
-          !justUnblocked.has(String(appid)) &&
-          !suppressAutoSelect.has(String(appid))
+          !isRecentlyUnblocked(appid, meta) &&
+          !isAutoSelectSuppressedForMeta(appid, meta)
         ) {
           setTimeout(() => enqueueAutoSelect(meta), 0);
         }
@@ -10778,6 +11634,7 @@ module.exports = function makeWatchedFolders({
           markBootOnboardingDirtyRoot(root, "watch:change");
           return;
         }
+        if (routeLocalPatchEvent(filePath)) return;
         if (await handleUbisoftOfficialRootFileEvent(root, filePath)) {
           return;
         }
@@ -11005,8 +11862,8 @@ module.exports = function makeWatchedFolders({
             if (
               !bootMode &&
               tenokeReady &&
-              !justUnblocked.has(String(appid)) &&
-              !suppressAutoSelect.has(String(appid))
+              !isRecentlyUnblocked(appid, meta) &&
+              !isAutoSelectSuppressedForMeta(appid, meta)
             ) {
               setTimeout(() => enqueueAutoSelect(meta), 0);
             } else {
@@ -11015,8 +11872,8 @@ module.exports = function makeWatchedFolders({
                 appid: String(appid),
                 bootMode,
                 tenokeReady,
-                justUnblocked: justUnblocked.has(String(appid)),
-                suppressAutoSelect: suppressAutoSelect.has(String(appid)),
+                justUnblocked: isRecentlyUnblocked(appid, meta),
+                suppressAutoSelect: isAutoSelectSuppressedForMeta(appid, meta),
               });
             }
           }
@@ -11036,6 +11893,7 @@ module.exports = function makeWatchedFolders({
           markBootOnboardingDirtyRoot(root, "watch:addDir");
           return;
         }
+        if (routeLocalPatchEvent(dir)) return;
         if (handleUbisoftOfficialRootDirEvent(root, dir, schedule)) {
           return;
         }
@@ -11232,11 +12090,15 @@ module.exports = function makeWatchedFolders({
         }
         schedule(); // fallback
       })
-      .on("unlinkDir", () => {
+      .on("unlink", (filePath) => {
+        routeLocalPatchEvent(filePath);
+      })
+      .on("unlinkDir", (dirPath) => {
         if (!bootOnboardingGateOpen) {
           markBootOnboardingDirtyRoot(root, "watch:unlinkDir");
           return;
         }
+        routeLocalPatchEvent(dirPath);
         if (!rescanInProgress.value) schedule();
       })
       .on("error", (err) => {
@@ -11257,6 +12119,8 @@ module.exports = function makeWatchedFolders({
     const root = normalizeRoot(inputRoot);
     const entry = folderWatchers.get(root) || folderWatchers.get(inputRoot);
     if (!entry) return;
+    entry.stopped = true;
+    entry.rescanQueued = false;
     clearTimeout(entry.debounce);
     try {
       entry.resolveReady?.(false);
@@ -11591,6 +12455,14 @@ module.exports = function makeWatchedFolders({
       }
 
       stopFolderWatcher(target);
+      const markerPatchMeta = findMarkerPatchMetaForRoot(target);
+      if (markerPatchMeta) {
+        stopMarkerPatchSaveWatcher(markerPatchMeta, "folder-removed");
+      }
+      const madnessPatchMeta = findMadnessPatchMetaForRoot(target);
+      if (madnessPatchMeta) {
+        stopMadnessPatchSaveWatcher(madnessPatchMeta, "folder-removed");
+      }
 
       // Remove the target completely, including any hidden ignored state.
       const currentRaw = getUserWatchedFoldersRaw();
@@ -12049,27 +12921,122 @@ module.exports = function makeWatchedFolders({
     maybeEmitBootComplete();
   });
 
-  ipcMain.on("blacklist:removed-appid", (_e, appid) => {
-    if (Array.isArray(appid)) {
-      for (const id of appid) {
+  function collectResetUnblockCandidates(removedEntries = []) {
+    const candidates = [];
+    if (!Array.isArray(removedEntries)) return candidates;
+
+    for (const entry of removedEntries) {
+      if (!entry || typeof entry !== "object") continue;
+      const entryAppId = normalizeAppIdValue(entry.appid);
+      if (!entryAppId) continue;
+
+      const entryScope = String(entry.scope || "")
+        .trim()
+        .toLowerCase();
+      const entryPlatform = entry.platform
+        ? normalizePlatform(entry.platform)
+        : null;
+      if (entryScope !== "global" && entryScope !== "platform") continue;
+      if (entryScope === "platform" && !entryPlatform) continue;
+
+      for (const meta of getConfigMetas(entryAppId)) {
+        if (
+          entryScope === "platform" &&
+          normalizePlatform(meta?.platform) !== entryPlatform
+        ) {
+          continue;
+        }
+        candidates.push(meta);
+      }
+    }
+
+    return candidates;
+  }
+
+  ipcMain.on("blacklist:removed-appid", (_e, payload) => {
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const removedScopes = new Set(
+        Array.isArray(payload?.removedScopes)
+          ? payload.removedScopes.map((scope) =>
+              String(scope || "").trim().toLowerCase(),
+            )
+          : [],
+      );
+      const normalizedAppId = normalizeAppIdValue(payload?.appid);
+      const normalizedPlatform = payload?.platform
+        ? normalizePlatform(payload.platform)
+        : null;
+      const candidates = [];
+
+      if (payload?.reset === true) {
+        candidates.push(
+          ...collectResetUnblockCandidates(payload?.removedEntries),
+        );
+      } else if (normalizedAppId) {
+        const appMetas = getConfigMetas(normalizedAppId);
+        const globalScopeRemoved = removedScopes.has("global");
+        for (const meta of appMetas) {
+          if (
+            !globalScopeRemoved &&
+            normalizedPlatform &&
+            normalizePlatform(meta?.platform) !== normalizedPlatform
+          ) {
+            continue;
+          }
+          candidates.push(meta);
+        }
+      }
+
+      const currentBlacklist = getBlacklistState();
+      const markedConfigs = new Set();
+      for (const meta of candidates) {
+        const metaAppId = normalizeAppIdValue(meta?.appid || normalizedAppId);
+        if (!metaAppId || !meta?.name || markedConfigs.has(meta.name)) continue;
+        if (
+          isAppIdBlacklisted(
+            metaAppId,
+            meta?.platform || null,
+            currentBlacklist,
+          )
+        ) {
+          continue;
+        }
+        markedConfigs.add(meta.name);
+        justUnblockedConfigs.add(meta.name);
+        cancelAutoSelectForMeta(meta);
+      }
+      watcherLogger.info("blacklist:unblock-suppression-applied", {
+        appid: normalizedAppId || null,
+        platform: normalizedPlatform || null,
+        reset: payload?.reset === true,
+        removedEntryCount: Array.isArray(payload?.removedEntries)
+          ? payload.removedEntries.length
+          : 0,
+        removedScopes: Array.from(removedScopes),
+        configs: Array.from(markedConfigs),
+      });
+      return;
+    }
+
+    if (Array.isArray(payload)) {
+      for (const id of payload) {
         const normalized = normalizeAppIdValue(id);
         if (normalized) {
           justUnblocked.add(normalized);
           suppressAutoSelect.add(normalized);
-          suppressAutoSelectByConfig.add(normalized);
           cancelAutoSelectForApp(normalized);
         }
       }
       return;
     }
-    const normalized = normalizeAppIdValue(appid);
+    const normalized = normalizeAppIdValue(payload);
     if (normalized) {
       justUnblocked.add(normalized);
       suppressAutoSelect.add(normalized);
-      suppressAutoSelectByConfig.add(normalized);
       cancelAutoSelectForApp(normalized);
-    } else if (appid === null) {
+    } else if (payload === null) {
       justUnblocked.clear();
+      justUnblockedConfigs.clear();
       suppressAutoSelect.clear();
       suppressAutoSelectByConfig.clear();
       autoSelectEmitted.clear();
@@ -12134,6 +13101,9 @@ module.exports = function makeWatchedFolders({
       stopLumaPlayDiscoveryPolling();
       stopBootOnboardingAttentionLoop();
       for (const entry of folderWatchers.values()) {
+        entry.stopped = true;
+        entry.rescanQueued = false;
+        clearTimeout(entry.debounce);
         try {
           await entry.watcher.close();
         } catch {}
@@ -12168,6 +13138,7 @@ module.exports = function makeWatchedFolders({
   return {
     beginConfigDeletion,
     endConfigDeletion,
+    resetPlatinumState,
     rebuildKnownAppIds,
     refreshConfigState,
     isBootOnboardingPending,
