@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const yaml = require("js-yaml")
 
 const root = path.resolve(__dirname, "..");
 const runtimeRoot = path.join(root, "assets", "san-runtime");
@@ -53,11 +54,9 @@ for (const relativePath of requiredFiles) {
   if (!fs.statSync(fullPath).size) empty.push(relativePath);
 }
 
-const packageJson = JSON.parse(
-  fs.readFileSync(path.join(root, "package.json"), "utf8"),
-);
-const packagedFiles = Array.isArray(packageJson?.build?.files)
-  ? packageJson.build.files
+const packageJson = yaml.load(fs.readFileSync(path.join(root, "electron-builder.yml"), "utf8"));
+const packagedFiles = Array.isArray(packageJson?.files)
+  ? packageJson.files
   : [];
 const assetsIncluded = packagedFiles.some((entry) => {
   const value = typeof entry === "string" ? entry : entry?.from;
@@ -68,7 +67,7 @@ if (missing.length || empty.length || !assetsIncluded) {
   const details = [];
   if (missing.length) details.push(`missing: ${missing.join(", ")}`);
   if (empty.length) details.push(`empty: ${empty.join(", ")}`);
-  if (!assetsIncluded) details.push("package.json does not include assets/**");
+  if (!assetsIncluded) details.push("electron-builder.yml does not include assets/**");
   throw new Error(`SAN runtime verification failed (${details.join("; ")})`);
 }
 
