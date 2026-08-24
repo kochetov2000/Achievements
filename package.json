@@ -39,7 +39,7 @@
     "koffi": "^3.1.5",
     "playwright": "^1.62.1",
     "playwright-extra": "^4.3.6",
-    "ps-list": "9.0.0",
+    "ps-list": "8.1.1",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "screenshot-desktop": "^1.15.6",
     "uiohook-napi": "1.5.5",
